@@ -33,13 +33,14 @@ void consumer_thread(std::shared_ptr<RingBuffer> buffer) {
     }
 
     StereoFrame current_frame;
-    std::cout << "[THREAD 2] Consumer actif sur le Cœur 3. Prêt pour les I/O POSIX..." << std::endl;
+    std::cout << "[THREAD 2] Consumer actif sur le Cœur 3. Prêt pour les I/O POSIX vers /mnt/vault..." << std::endl;
     
     int frame_count = 0;
 
     while (buffer->pop(current_frame)) {
-        std::string file0 = "data/cam0_" + std::to_string(current_frame.timestamp) + ".raw";
-        std::string file1 = "data/cam1_" + std::to_string(current_frame.timestamp) + ".raw";
+        // Redirection I/O absolue vers le SSD via le bus PCIe/SATA
+        std::string file0 = "/mnt/vault/cam0_" + std::to_string(current_frame.timestamp) + ".raw";
+        std::string file1 = "/mnt/vault/cam1_" + std::to_string(current_frame.timestamp) + ".raw";
 
         std::ofstream out0(file0, std::ios::binary);
         if (out0) {
@@ -54,7 +55,7 @@ void consumer_thread(std::shared_ptr<RingBuffer> buffer) {
         }
 
         frame_count++;
-        std::cout << "[I/O] Frame " << frame_count << " déchargée sur le stockage. TS: " << current_frame.timestamp << std::endl;
+        std::cout << "[I/O] Frame " << frame_count << " déchargée sur le stockage (SSD). TS: " << current_frame.timestamp << std::endl;
     }
     
     std::cout << "[THREAD 2] RAM purgée intégralement. Consumer arrêté proprement." << std::endl;
