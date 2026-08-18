@@ -38,3 +38,11 @@ target_link_libraries(hydro_edge
     ${SPINNAKER_LIBRARY} 
     pthread
 )
+
+# Diagnostic tool: read-only inventory of the camera front-end.
+# Deliberately kept out of the acquisition binary and free of any OpenCV
+# dependency, so that it can be built and run without touching the critical
+# acquisition path.
+add_executable(cam_probe tools/cam_probe.cpp)
+target_include_directories(cam_probe PRIVATE ${SPINNAKER_INCLUDE_DIR})
+target_link_libraries(cam_probe ${SPINNAKER_LIBRARY})

@@ -1,0 +1,384 @@
+Spinnaker library 4.3.0.189
+Cameras enumerated: 2
+
+================================================================
+ CAMERA 0
+================================================================
+
+  --- TL DEVICE NODE MAP (pre-Init, full dump) ---
+    DeviceID                          USB\VID_1E10&SRL_01722E60
+    DeviceSerialNumber                24260192
+    DeviceUserID                      
+    DeviceVendorName                  FLIR
+    DeviceModelName                   Blackfly S BFS-U3-161S7C
+    DeviceVersion                     2210.0.657.0
+    DeviceType                        USB3Vision
+    DeviceDisplayName                 FLIR
+    DeviceAccessStatus                OpenReadWrite
+    DeviceDriverVersion               Unknown : 0.0.0.0
+    DeviceIsUpdater                   0
+    DeviceInstanceId                  USB\VID_1E10&SRL_01722E60
+    DeviceLocation                    
+    DeviceCurrentSpeed                SuperSpeed
+    DeviceU3VProtocol                 1
+    DevicePortId                      
+    GenICamXMLLocation                Device
+    GenICamXMLPath                    
+    GUIXMLLocation                    Device
+    GUIXMLPath                        Input.xml
+    DeviceEndianessMechanism          Standard
+    StreamSelector                    0
+    StreamID                          0
+    DeviceVersionAvailable_Int        1
+    DeviceIsUpdater_RegVal            0
+    DeviceBootloaderVersionAvailable_Int0
+    DeviceBootloaderVersion_RegVal    0
+    DeviceType_Val                    4
+    DeviceAccessStatus_RegVal         5
+    DeviceCurrentSpeed_RegVal         8
+    DeviceU3VProtocol_RegVal          1
+    GenICamXMLLocation_RegVal         0
+    GUIXMLLocation_RegVal             0
+    StreamSelector_RegVal             0
+    StreamSelectorIndexMax            0
+    StreamCount_RegVal                1
+    (36 readable nodes)
+
+  --- IDENTITY AND FIRMWARE ---
+    DeviceModelName                   Blackfly S BFS-U3-161S7C
+    DeviceSerialNumber                24260192
+    DeviceVersion                     2210.0.657.0
+    DeviceFirmwareVersion             2210.0.657.0
+    DeviceUserID                      
+    DeviceTemperature                 46
+    DeviceUptime                      2016
+
+  --- SENSOR GEOMETRY AND PAYLOAD ---
+    SensorWidth                       5328
+    SensorHeight                      3104
+    WidthMax                          5320
+    HeightMax                         3032
+    Width                             5320
+    Height                            3032
+    OffsetX                           0
+    OffsetY                           0
+    BinningHorizontal                 1
+    BinningVertical                   1
+    DecimationHorizontal              1
+    DecimationVertical                1
+    ReverseX                          0
+    ReverseY                          0
+    PayloadSize                       16130240
+
+  --- PIXEL FORMAT AND ON-BOARD PROCESSING ---
+    PixelFormat                       BayerRG8
+    PixelSize                         Bpp8
+    PixelColorFilter                  BayerRG
+    PixelDynamicRangeMin              0
+    PixelDynamicRangeMax              255
+    AdcBitDepth                       Bit10
+    IspEnable                         0
+    GammaEnable                       1
+    Gamma                             0.800049
+    BlackLevel                        0
+    BlackLevelClampingEnable          1
+    SharpeningEnable                  <unavailable>
+    SaturationEnable                  <unavailable>
+
+  --- SHUTTER, EXPOSURE AND GAIN ---
+    SensorShutterMode                 Global
+    AcquisitionMode                   Continuous
+    AcquisitionFrameRateEnable        0
+    AcquisitionFrameRate              21.5355
+    AcquisitionResultingFrameRate     21.536
+    ExposureMode                      Timed
+    ExposureAuto                      Continuous
+    ExposureTime                      993
+    GainAuto                          Continuous
+    Gain                              0
+    GainSelector                      All
+    BalanceWhiteAuto                  Continuous
+
+  --- TRIGGERING ---
+    TriggerSelector                   FrameStart
+    TriggerMode                       Off
+    TriggerSource                     Software
+    TriggerActivation                 <unavailable>
+    TriggerOverlap                    Off
+    TriggerDelay                      60
+    LineSelector                      Line0
+    LineMode                          Input
+    LineStatus                        0
+    LineInverter                      0
+    LineSource                        Off
+
+  --- LINK THROUGHPUT ---
+    DeviceLinkThroughputLimit         380000000
+    DeviceLinkCurrentThroughput       347382285
+    DeviceMaxThroughput               347382311
+    DeviceLinkSpeed                   500000000
+    DeviceLinkBandwidthReserve        0
+
+  --- CHUNK DATA (required for rigorous drop accounting) ---
+    ChunkModeActive                   0
+    ChunkSelector                     FrameID
+    ChunkEnable                       0
+    ChunkSelector entries available:
+      - Image
+      - CRC
+      - FrameID
+      - OffsetX
+      - OffsetY
+      - Width
+      - Height
+      - ExposureTime
+      - Gain
+      - BlackLevel
+      - PixelFormat
+      - Timestamp
+      - SequencerSetActive
+      - SerialData
+      - ExposureEndLineStatusAll
+
+  --- USER SETS (persisted configuration) ---
+    UserSetSelector                   Default
+    UserSetDefault                    Default
+
+  --- TL STREAM NODE MAP (full dump) ---
+    StreamID                          0
+    StreamType                        USB3Vision
+    StreamBufferCountManual           9
+    StreamBufferCountResult           9
+    StreamBufferCountMax              58
+    StreamBufferCountMode             Manual
+    StreamBufferHandlingMode          OldestFirst
+    StreamAnnounceBufferMinimum       1
+    StreamAnnouncedBufferCount        0
+    StreamStartedFrameCount           0
+    StreamDeliveredFrameCount         0
+    StreamIncompleteFrameCount        0
+    StreamLostFrameCount              0
+    StreamInputBufferCount            0
+    StreamOutputBufferCount           0
+    StreamBlockTransferSize           1048576
+    StreamCRCCheckEnable              0
+    StreamIsGrabbing                  0
+    StreamChunkCountMaximum           50
+    StreamBufferAlignment             1
+    StreamDroppedFrameCount           0
+    StreamBufferCountManual_Lock      0
+    StreamBufferCountManual_RegVal    9
+    StreamAnnounceBufferMinimum_RegVal1
+    StreamBufferCountMax_RegVal       58
+    StreamBufferCountResult_Val       9
+    StreamBufferCountModeResult_Val   9
+    StreamBufferCountMode_RegVal      0
+    StreamBufferHandlingMode_RegVal   0
+    StreamCRCCheckEnable_RegVal       0
+    StreamDeliveredFrameCount_RegVal  0
+    StreamIncompleteFrameCount_RegVal 0
+    StreamLostFrameCount_RegVal       0
+    StreamBlockTransferSize_Lock      0
+    StreamBlockTransferSize_RegVal    1048576
+    StreamBlockTransferSizeMax_RegVal 0
+    StreamAnnouncedBufferCount_RegVal 0
+    StreamInputBufferCount_RegVal     0
+    StreamOutputBufferCount_RegVal    0
+    StreamStartedFrameCount_RegVal    0
+    StreamIsGrabbing_RegVal           0
+    StreamChunkCountMaximum_RegVal    50
+    StreamBufferAlignment_RegVal      1
+    StreamDroppedFrameCount_RegVal    0
+    (44 readable nodes)
+
+================================================================
+ CAMERA 1
+================================================================
+
+  --- TL DEVICE NODE MAP (pre-Init, full dump) ---
+    DeviceID                          USB\VID_1E10&SRL_01722E61
+    DeviceSerialNumber                24260193
+    DeviceUserID                      
+    DeviceVendorName                  FLIR
+    DeviceModelName                   Blackfly S BFS-U3-161S7C
+    DeviceVersion                     2210.0.657.0
+    DeviceType                        USB3Vision
+    DeviceDisplayName                 FLIR
+    DeviceAccessStatus                OpenReadWrite
+    DeviceDriverVersion               Unknown : 0.0.0.0
+    DeviceIsUpdater                   0
+    DeviceInstanceId                  USB\VID_1E10&SRL_01722E61
+    DeviceLocation                    
+    DeviceCurrentSpeed                SuperSpeed
+    DeviceU3VProtocol                 1
+    DevicePortId                      
+    GenICamXMLLocation                Device
+    GenICamXMLPath                    
+    GUIXMLLocation                    Device
+    GUIXMLPath                        Input.xml
+    DeviceEndianessMechanism          Standard
+    StreamSelector                    0
+    StreamID                          0
+    DeviceVersionAvailable_Int        1
+    DeviceIsUpdater_RegVal            0
+    DeviceBootloaderVersionAvailable_Int0
+    DeviceBootloaderVersion_RegVal    0
+    DeviceType_Val                    4
+    DeviceAccessStatus_RegVal         5
+    DeviceCurrentSpeed_RegVal         8
+    DeviceU3VProtocol_RegVal          1
+    GenICamXMLLocation_RegVal         0
+    GUIXMLLocation_RegVal             0
+    StreamSelector_RegVal             0
+    StreamSelectorIndexMax            0
+    StreamCount_RegVal                1
+    (36 readable nodes)
+
+  --- IDENTITY AND FIRMWARE ---
+    DeviceModelName                   Blackfly S BFS-U3-161S7C
+    DeviceSerialNumber                24260193
+    DeviceVersion                     2210.0.657.0
+    DeviceFirmwareVersion             2210.0.657.0
+    DeviceUserID                      
+    DeviceTemperature                 45.5
+    DeviceUptime                      2018
+
+  --- SENSOR GEOMETRY AND PAYLOAD ---
+    SensorWidth                       5328
+    SensorHeight                      3104
+    WidthMax                          5320
+    HeightMax                         3032
+    Width                             5320
+    Height                            3032
+    OffsetX                           0
+    OffsetY                           0
+    BinningHorizontal                 1
+    BinningVertical                   1
+    DecimationHorizontal              1
+    DecimationVertical                1
+    ReverseX                          0
+    ReverseY                          0
+    PayloadSize                       16130240
+
+  --- PIXEL FORMAT AND ON-BOARD PROCESSING ---
+    PixelFormat                       BayerRG8
+    PixelSize                         Bpp8
+    PixelColorFilter                  BayerRG
+    PixelDynamicRangeMin              0
+    PixelDynamicRangeMax              255
+    AdcBitDepth                       Bit10
+    IspEnable                         0
+    GammaEnable                       1
+    Gamma                             0.800049
+    BlackLevel                        0
+    BlackLevelClampingEnable          1
+    SharpeningEnable                  <unavailable>
+    SaturationEnable                  <unavailable>
+
+  --- SHUTTER, EXPOSURE AND GAIN ---
+    SensorShutterMode                 Global
+    AcquisitionMode                   Continuous
+    AcquisitionFrameRateEnable        0
+    AcquisitionFrameRate              21.5355
+    AcquisitionResultingFrameRate     21.536
+    ExposureMode                      Timed
+    ExposureAuto                      Continuous
+    ExposureTime                      993
+    GainAuto                          Continuous
+    Gain                              0
+    GainSelector                      All
+    BalanceWhiteAuto                  Continuous
+
+  --- TRIGGERING ---
+    TriggerSelector                   FrameStart
+    TriggerMode                       Off
+    TriggerSource                     Software
+    TriggerActivation                 <unavailable>
+    TriggerOverlap                    Off
+    TriggerDelay                      60
+    LineSelector                      Line0
+    LineMode                          Input
+    LineStatus                        0
+    LineInverter                      0
+    LineSource                        Off
+
+  --- LINK THROUGHPUT ---
+    DeviceLinkThroughputLimit         380000000
+    DeviceLinkCurrentThroughput       347382285
+    DeviceMaxThroughput               347382311
+    DeviceLinkSpeed                   500000000
+    DeviceLinkBandwidthReserve        0
+
+  --- CHUNK DATA (required for rigorous drop accounting) ---
+    ChunkModeActive                   0
+    ChunkSelector                     FrameID
+    ChunkEnable                       0
+    ChunkSelector entries available:
+      - Image
+      - CRC
+      - FrameID
+      - OffsetX
+      - OffsetY
+      - Width
+      - Height
+      - ExposureTime
+      - Gain
+      - BlackLevel
+      - PixelFormat
+      - Timestamp
+      - SequencerSetActive
+      - SerialData
+      - ExposureEndLineStatusAll
+
+  --- USER SETS (persisted configuration) ---
+    UserSetSelector                   Default
+    UserSetDefault                    Default
+
+  --- TL STREAM NODE MAP (full dump) ---
+    StreamID                          0
+    StreamType                        USB3Vision
+    StreamBufferCountManual           9
+    StreamBufferCountResult           9
+    StreamBufferCountMax              58
+    StreamBufferCountMode             Manual
+    StreamBufferHandlingMode          OldestFirst
+    StreamAnnounceBufferMinimum       1
+    StreamAnnouncedBufferCount        0
+    StreamStartedFrameCount           0
+    StreamDeliveredFrameCount         0
+    StreamIncompleteFrameCount        0
+    StreamLostFrameCount              0
+    StreamInputBufferCount            0
+    StreamOutputBufferCount           0
+    StreamBlockTransferSize           1048576
+    StreamCRCCheckEnable              0
+    StreamIsGrabbing                  0
+    StreamChunkCountMaximum           50
+    StreamBufferAlignment             1
+    StreamDroppedFrameCount           0
+    StreamBufferCountManual_Lock      0
+    StreamBufferCountManual_RegVal    9
+    StreamAnnounceBufferMinimum_RegVal1
+    StreamBufferCountMax_RegVal       58
+    StreamBufferCountResult_Val       9
+    StreamBufferCountModeResult_Val   9
+    StreamBufferCountMode_RegVal      0
+    StreamBufferHandlingMode_RegVal   0
+    StreamCRCCheckEnable_RegVal       0
+    StreamDeliveredFrameCount_RegVal  0
+    StreamIncompleteFrameCount_RegVal 0
+    StreamLostFrameCount_RegVal       0
+    StreamBlockTransferSize_Lock      0
+    StreamBlockTransferSize_RegVal    1048576
+    StreamBlockTransferSizeMax_RegVal 0
+    StreamAnnouncedBufferCount_RegVal 0
+    StreamInputBufferCount_RegVal     0
+    StreamOutputBufferCount_RegVal    0
+    StreamStartedFrameCount_RegVal    0
+    StreamIsGrabbing_RegVal           0
+    StreamChunkCountMaximum_RegVal    50
+    StreamBufferAlignment_RegVal      1
+    StreamDroppedFrameCount_RegVal    0
+    (44 readable nodes)
+
+Probe complete. No camera setting was modified.
