@@ -62,6 +62,12 @@ struct Config
     // the factory default of 9 is not a decision.
     int64_t     stream_buffers = 16;
 
+    // Consecutive rejected pushes tolerated before the burst is abandoned.
+    // A handful means the drive stuttered; a sustained run means it cannot
+    // keep up, and continuing only produces an archive full of holes while
+    // consuming the battery.
+    int64_t     max_consecutive_overflows = 20;
+
     // Derived
     uint64_t total_triggers() const
     {
@@ -97,6 +103,8 @@ inline void printUsage(const char* argv0)
         << "  --trigger <mode>      software (default), line2 or line0. The two hardware\n"
         << "                        modes are written but UNVALIDATED: no cabling yet.\n"
         << "  --stream-buffers <n>  Transport buffer pool per camera (default: 16, max 58).\n"
+        << "  --max-overflows <n>   Consecutive ring buffer overflows tolerated before the\n"
+        << "                        burst is abandoned (default: 20).\n"
         << "  --dry-run             Validate configuration, enumerate cameras and check\n"
         << "                        free space, then exit without acquiring or writing.\n"
         << "  --help                This message.\n";
@@ -208,6 +216,16 @@ inline bool parseArgs(int argc, char** argv, Config& cfg, bool& help_requested)
                 return false;
             }
         }
+        else if (arg == "--max-overflows")
+        {
+            if (!needValue(i, "--max-overflows")) return false;
+            cfg.max_consecutive_overflows = std::atol(argv[++i]);
+            if (cfg.max_consecutive_overflows < 1)
+            {
+                std::cerr << "[CONFIG] --max-overflows must be at least 1.\n";
+                return false;
+            }
+        }
         else if (arg == "--dry-run")
         {
             cfg.dry_run = true;
@@ -279,7 +297,9 @@ struct TimingRecord
     int64_t  cam1_frame_id = -1;
     uint64_t cam0_dev_ts   = 0;
     uint64_t cam1_dev_ts   = 0;
-    int      status        = 0;   // 0 written, 1 incomplete, 2 retrieval error
+    // 0 pushed, 1 incomplete, 2 retrieval error, 3 buffer overflow,
+    // 4 skipped because its slot instant had already passed
+    int      status        = 0;
 };
 
 // Transport-layer counters, read from the stream node map at the end of the
@@ -315,6 +335,8 @@ struct BurstStats
     std::atomic<uint64_t> retrieval_errors{0};
     std::atomic<uint64_t> pps_timeouts{0};
     std::atomic<uint64_t> write_errors{0};
+    std::atomic<uint64_t> buffer_overflows{0};
+    std::atomic<uint64_t> late_frames{0};
 
     // Frames the device exposed and the driver never delivered, inferred
     // from discontinuities in the device frame identifier.
@@ -649,7 +671,9 @@ inline bool writeSummary(const std::string& path,
     f << "    \"retrieval_errors\": " << stats.retrieval_errors.load() << ",\n";
     f << "    \"pps_timeouts\": "     << stats.pps_timeouts.load() << ",\n";
     f << "    \"write_errors\": "     << stats.write_errors.load() << ",\n";
-    f << "    \"transport_frame_id_gaps\": " << stats.fid_gaps.load() << "\n";
+    f << "    \"transport_frame_id_gaps\": " << stats.fid_gaps.load() << ",\n";
+    f << "    \"buffer_overflows\": "        << stats.buffer_overflows.load() << ",\n";
+    f << "    \"late_frames_skipped\": "     << stats.late_frames.load() << "\n";
     f << "  },\n";
 
     f << "  \"transport_counters\": [\n";

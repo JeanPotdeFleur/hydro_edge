@@ -58,13 +58,24 @@ using namespace Spinnaker::GenICam;
 
 namespace fs = std::filesystem;
 
-std::atomic<bool> keep_running{true};
+std::atomic<bool>    keep_running{true};
+std::atomic<int>     caught_signal{0};
 
-void sigint_handler(int signum)
+// Handles SIGINT and SIGTERM alike. SIGTERM is not optional: it is what
+// systemd sends on stop, and what the kernel sends at shutdown. Handling only
+// SIGINT meant that every orderly stop of the future service unit would kill
+// the process outright and discard whatever the ring buffer still held, up to
+// thirty seconds of acquisition.
+//
+// The handler does nothing but set two flags. Writing to a stream from a
+// signal handler is not async-signal-safe: std::cout is not reentrant, and a
+// signal arriving while the consumer holds its internal lock would deadlock
+// the process at the exact moment it is being asked to stop cleanly. The
+// message is printed by the main thread once it observes the flag.
+extern "C" void signal_handler(int signum)
 {
-    std::cout << "\n[SYSTEM] Signal " << signum << " intercepted. Initiating graceful shutdown..."
-              << std::endl;
-    keep_running = false;
+    caught_signal.store(signum, std::memory_order_relaxed);
+    keep_running.store(false, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -723,8 +734,9 @@ void producer_thread(CameraPtr                      cam0,
         // do not reset at BeginAcquisition and the two sensors were observed
         // starting two frames apart, so only the increment within one camera
         // carries meaning; comparing absolute values across sensors does not.
-        int64_t  last_fid[2]   = {-1, -1};
-        uint64_t gap_reports   = 0;
+        int64_t  last_fid[2]          = {-1, -1};
+        uint64_t gap_reports          = 0;
+        int64_t  consecutive_overflows = 0;
         auto     last_beat     = std::chrono::steady_clock::now();
         const auto beat_period = std::chrono::seconds(60);
 
@@ -827,11 +839,37 @@ void producer_thread(CameraPtr                      cam0,
 
                     if (!geometry_bad)
                     {
-                        buffer->push(static_cast<const uint8_t*>(img0->GetData()),
-                                     static_cast<const uint8_t*>(img1->GetData()),
-                                     ts_ns, index);
-                        stats->frames_pushed.fetch_add(1);
-                        rec.status = 0;
+                        const bool stored =
+                            buffer->push(static_cast<const uint8_t*>(img0->GetData()),
+                                         static_cast<const uint8_t*>(img1->GetData()),
+                                         ts_ns, index);
+                        if (stored)
+                        {
+                            stats->frames_pushed.fetch_add(1);
+                            rec.status         = 0;
+                            consecutive_overflows = 0;
+                        }
+                        else
+                        {
+                            // The drive has fallen behind by the full depth of
+                            // the buffer. The frame is lost, deliberately and
+                            // countably, rather than by process death.
+                            ++consecutive_overflows;
+                            stats->buffer_overflows.fetch_add(1);
+                            stats->recordMissing(index);
+                            rec.status = 3;
+                            std::cerr << "[OVERFLOW] index " << index << ": ring buffer full ("
+                                      << buffer->capacity() << " slots), frame dropped ("
+                                      << consecutive_overflows << " consecutive)\n";
+                            if (consecutive_overflows >= cfg.max_consecutive_overflows)
+                            {
+                                std::cerr << "[CRITICAL] " << consecutive_overflows
+                                          << " consecutive overflows: storage cannot sustain "
+                                             "the ingestion rate. Abandoning the burst so that "
+                                             "what has been written stays coherent.\n";
+                                keep_running = false;
+                            }
+                        }
                     }
                 }
                 else
@@ -891,20 +929,60 @@ void producer_thread(CameraPtr                      cam0,
 
             if (!keep_running || next_index > total_triggers) break;
 
-            // Frame B, half a second later.
+            // Frame B, at the absolute instant t_pps + 500 ms.
             //
-            // KNOWN DEFECT, scheduled for a later patch: the delay is measured
-            // from now(), that is from the moment frame A was retrieved, not
-            // from the PPS edge. Retrieval latency is therefore added to the
-            // half-period, producing alternating intervals around 510 and
-            // 490 ms. The timestamp written to the archive nevertheless claims
-            // an exact +500 ms. The timing record now measures this directly.
-            auto target = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-            std::this_thread::sleep_until(target);
+            // The previous implementation slept a fixed 500 ms measured from
+            // the moment frame A had been retrieved, which charged the whole
+            // retrieval latency to the half-period: measurement gave 559.0 ms
+            // for the A to B leg and 441.0 ms for B to A, an 11.8 per cent
+            // modulation entering the f-k transforms of the OCM directly.
+            //
+            // The target is now the instant itself, in the same CLOCK_REALTIME
+            // domain as the PPS assert timestamp, and the sleep is whatever
+            // remains of it, around 447 ms once the 52.5 ms of two sequential
+            // 16.13 MB USB transfers have been paid. clock_nanosleep with
+            // TIMER_ABSTIME is used in preference to sleep_until on the steady
+            // clock, which would require converting between two clock domains
+            // and reintroduce the error it is meant to remove.
+            const uint64_t slot_ns = t_base_ns + 500000000ULL;
+            struct timespec slot;
+            slot.tv_sec  = static_cast<time_t>(slot_ns / 1000000000ULL);
+            slot.tv_nsec = static_cast<long>(slot_ns % 1000000000ULL);
+
+            const uint64_t before_sleep = nowRealtimeNs();
+            if (before_sleep >= slot_ns)
+            {
+                // Retrieval overran the half-period. Firing now would produce a
+                // frame exposed late and stamped on time, which is a falsified
+                // record and worse than a gap: the archive would look intact.
+                stats->late_frames.fetch_add(1);
+                stats->triggers_issued.fetch_add(1);
+                stats->recordMissing(next_index);
+
+                TimingRecord late;
+                late.index         = next_index;
+                late.pps_anchor_ns = t_base_ns;
+                late.planned_ns    = slot_ns;
+                late.trigger_ns    = before_sleep;
+                late.status        = 4;
+                stats->timing.push_back(late);
+
+                std::cerr << "[LATE] index " << next_index << ": slot instant already "
+                          << (before_sleep - slot_ns) / 1000 << " us in the past, frame "
+                          << "skipped rather than stamped with a time it was not taken at\n";
+                ++next_index;
+                continue;
+            }
+
+            // EINTR is expected: a signal delivered mid-sleep must end it.
+            while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &slot, nullptr) == EINTR)
+            {
+                if (!keep_running) break;
+            }
 
             if (!keep_running) break;
 
-            fireOnce(next_index++, t_base_ns + 500000000ULL, t_base_ns);
+            fireOnce(next_index++, slot_ns, t_base_ns);
         }
 
         // Read before EndAcquisition: the stream node map reports the counters
@@ -945,7 +1023,8 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    std::signal(SIGINT, sigint_handler);
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
 
     const bool clock_ok = clockIsSynchronized();
     if (!clock_ok)
@@ -1078,11 +1157,22 @@ int main(int argc, char** argv)
         t1.join();
         t2.join();
 
+        const int sig = caught_signal.load();
+        if (sig != 0)
+        {
+            std::cout << "\n[SYSTEM] Signal " << sig
+                      << " received; the ring buffer was drained before exit.\n";
+        }
+
         const double wall_s =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
 
+        // A burst that ran to term but shed frames is not a complete burst.
         const bool completed =
-            keep_running.load() && (stats->triggers_issued.load() >= cfg.total_triggers());
+            keep_running.load() &&
+            (stats->triggers_issued.load() >= cfg.total_triggers()) &&
+            (stats->buffer_overflows.load() == 0) &&
+            (stats->late_frames.load() == 0);
 
         writeSummary(burst_path + "/summary.json", cfg, *stats, wall_s, payload, cams.size(),
                      completed);
@@ -1099,6 +1189,8 @@ int main(int argc, char** argv)
                   << (static_cast<double>(stats->frames_written.load()) *
                       static_cast<double>(payload) * cams.size() / wall_s / 1e6)
                   << " MB/s mean\n";
+        std::cout << "[SUMMARY] buffer overflows " << stats->buffer_overflows.load()
+                  << ", late frames skipped " << stats->late_frames.load() << "\n";
         std::cout << "[SUMMARY] transport frame id gaps " << stats->fid_gaps.load()
                   << ", ring buffer peak " << stats->buffer_high_water.load() << "/"
                   << stats->buffer_capacity.load() << " frames\n";

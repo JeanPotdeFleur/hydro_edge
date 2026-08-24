@@ -31,6 +31,9 @@ private:
     // water mark far below capacity means the drive kept up, one approaching
     // capacity means the margin is thinner than the nominal rate suggests.
     size_t high_water;
+    // Rejected pushes over the burst. Distinct from the high water mark: the
+    // mark says how close the pipeline came, this says how often it failed.
+    size_t overflow_count;
 
     std::mutex mtx;
     std::condition_variable cv_consumer;
@@ -38,7 +41,7 @@ private:
 
 public:
     RingBuffer(size_t size, size_t payload_bytes_per_cam) 
-        : head(0), tail(0), max_size(size), current_size(0), high_water(0), active(true) {
+        : head(0), tail(0), max_size(size), current_size(0), high_water(0), overflow_count(0), active(true) {
         
         buffer.resize(max_size);
         for (auto& frame : buffer) {
@@ -47,11 +50,21 @@ public:
         }
     }
 
-    void push(const uint8_t* pData0, const uint8_t* pData1, uint64_t ts, uint64_t index) {
+    // Returns false when the buffer is full, in which case nothing is stored
+    // and the caller decides what to do about it.
+    //
+    // The earlier implementation threw a std::runtime_error here. That
+    // exception escaped the producer thread, where no handler matched it, and
+    // terminated the process: the very RAM the buffer exists to protect was
+    // discarded at the exact moment it mattered. Overflow is a foreseeable
+    // consequence of a slow drive, not an exceptional condition, and an
+    // exception crossing a thread boundary is never a signalling mechanism.
+    bool push(const uint8_t* pData0, const uint8_t* pData1, uint64_t ts, uint64_t index) {
         std::lock_guard<std::mutex> lock(mtx);
 
         if (current_size == max_size) {
-            throw std::runtime_error("[CRITIQUE] Ring Buffer Overflow !");
+            ++overflow_count;
+            return false;
         }
 
         std::memcpy(buffer[head].cam0_data.data(), pData0, buffer[head].cam0_data.size());
@@ -63,6 +76,7 @@ public:
         current_size++;
         if (current_size > high_water) high_water = current_size;
         cv_consumer.notify_one();
+        return true;
     }
 
     bool pop(StereoFrame& out_frame) {
@@ -98,6 +112,11 @@ public:
     size_t highWater() {
         std::lock_guard<std::mutex> lock(mtx);
         return high_water;
+    }
+
+    size_t overflows() {
+        std::lock_guard<std::mutex> lock(mtx);
+        return overflow_count;
     }
 
     size_t capacity() const { return max_size; }
