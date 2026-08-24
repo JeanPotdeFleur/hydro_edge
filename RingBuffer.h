@@ -10,7 +10,13 @@
 struct StereoFrame {
     std::vector<uint8_t> cam0_data;
     std::vector<uint8_t> cam1_data;
-    uint64_t timestamp; 
+    uint64_t timestamp;
+    // Trigger ordinal within the burst, starting at 1. Carried through the
+    // buffer so that the consumer names files by the instant of exposure
+    // rather than by its own write count: a frame lost upstream must leave a
+    // gap, never shift every subsequent index and silently de-align the two
+    // cameras.
+    uint64_t index;
 };
 
 class RingBuffer {
@@ -36,7 +42,7 @@ public:
         }
     }
 
-    void push(const uint8_t* pData0, const uint8_t* pData1, uint64_t ts) {
+    void push(const uint8_t* pData0, const uint8_t* pData1, uint64_t ts, uint64_t index) {
         std::lock_guard<std::mutex> lock(mtx);
 
         if (current_size == max_size) {
@@ -46,6 +52,7 @@ public:
         std::memcpy(buffer[head].cam0_data.data(), pData0, buffer[head].cam0_data.size());
         std::memcpy(buffer[head].cam1_data.data(), pData1, buffer[head].cam1_data.size());
         buffer[head].timestamp = ts;
+        buffer[head].index = index;
 
         head = (head + 1) % max_size;
         current_size++;
@@ -66,6 +73,7 @@ public:
         out_frame.cam0_data.swap(buffer[tail].cam0_data);
         out_frame.cam1_data.swap(buffer[tail].cam1_data);
         out_frame.timestamp = buffer[tail].timestamp;
+        out_frame.index = buffer[tail].index;
 
         buffer[tail].cam0_data.resize(out_frame.cam0_data.capacity());
         buffer[tail].cam1_data.resize(out_frame.cam1_data.capacity());

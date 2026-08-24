@@ -26,8 +26,24 @@ endif()
 message(STATUS "Spinnaker headers trouvés dans : ${SPINNAKER_INCLUDE_DIR}")
 message(STATUS "Spinnaker library trouvée dans : ${SPINNAKER_LIBRARY}")
 
+# Short commit hash, captured at configure time and compiled into the binary
+# so that every burst manifest records the code version that produced it.
+# Re-run cmake after a commit for this to refresh.
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE HYDRO_EDGE_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT HYDRO_EDGE_GIT_SHA)
+    set(HYDRO_EDGE_GIT_SHA "unknown")
+endif()
+message(STATUS "Build tagged with commit: ${HYDRO_EDGE_GIT_SHA}")
+
 # Création de l'exécutable
 add_executable(hydro_edge main.cpp)
+target_compile_definitions(hydro_edge PRIVATE HYDRO_EDGE_GIT_SHA="${HYDRO_EDGE_GIT_SHA}")
 
 # Ajout des chemins d'en-tête (headers)
 target_include_directories(hydro_edge PRIVATE ${SPINNAKER_INCLUDE_DIR})
