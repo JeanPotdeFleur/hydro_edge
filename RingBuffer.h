@@ -26,6 +26,11 @@ private:
     size_t tail;
     size_t max_size;
     size_t current_size;
+    // Deepest occupancy observed over the burst. The single most informative
+    // number about how close the pipeline came to losing a frame: a high
+    // water mark far below capacity means the drive kept up, one approaching
+    // capacity means the margin is thinner than the nominal rate suggests.
+    size_t high_water;
 
     std::mutex mtx;
     std::condition_variable cv_consumer;
@@ -33,7 +38,7 @@ private:
 
 public:
     RingBuffer(size_t size, size_t payload_bytes_per_cam) 
-        : head(0), tail(0), max_size(size), current_size(0), active(true) {
+        : head(0), tail(0), max_size(size), current_size(0), high_water(0), active(true) {
         
         buffer.resize(max_size);
         for (auto& frame : buffer) {
@@ -56,6 +61,7 @@ public:
 
         head = (head + 1) % max_size;
         current_size++;
+        if (current_size > high_water) high_water = current_size;
         cv_consumer.notify_one();
     }
 
@@ -83,6 +89,18 @@ public:
 
         return true;
     }
+
+    size_t occupancy() {
+        std::lock_guard<std::mutex> lock(mtx);
+        return current_size;
+    }
+
+    size_t highWater() {
+        std::lock_guard<std::mutex> lock(mtx);
+        return high_water;
+    }
+
+    size_t capacity() const { return max_size; }
 
     // Déclencheur appelé par le Thread 1 lors du Ctrl+C
     void shutdown() {

@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -490,6 +491,42 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Wall-clock and transport-layer instrumentation
+// ---------------------------------------------------------------------------
+
+// CLOCK_REALTIME rather than the monotonic clock: the figure must be
+// comparable with the PPS assert timestamps, which the kernel stamps in the
+// same domain. It inherits that clock's absolute inaccuracy, which is
+// irrelevant here, every quantity derived from it being a difference.
+static inline uint64_t nowRealtimeNs()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+}
+
+// The driver's own view of the stream. These counters see frames the sensor
+// exposed and the transport layer discarded before the application was ever
+// offered them, which no count kept above the API can detect.
+static void readStreamCounters(CameraPtr pCam, StreamCounters& sc)
+{
+    try
+    {
+        INodeMap& sm  = pCam->GetTLStreamNodeMap();
+        sc.started    = nodeInt(sm, "StreamStartedFrameCount", -1);
+        sc.delivered  = nodeInt(sm, "StreamDeliveredFrameCount", -1);
+        sc.lost       = nodeInt(sm, "StreamLostFrameCount", -1);
+        sc.incomplete = nodeInt(sm, "StreamIncompleteFrameCount", -1);
+        sc.dropped    = nodeInt(sm, "StreamDroppedFrameCount", -1);
+    }
+    catch (Spinnaker::Exception& e)
+    {
+        std::cerr << "[TRANSPORT] Counters unreadable: " << e.what() << "\n";
+    }
+}
+
+// ---------------------------------------------------------------------------
 // System clock validity
 // ---------------------------------------------------------------------------
 // The Raspberry Pi has no battery-backed RTC. At boot the clock is restored
@@ -647,6 +684,11 @@ void producer_thread(CameraPtr                      cam0,
                      "on every retrieval.\n";
     }
 
+    // Reserved up front. A reallocation of several hundred kilobytes in the
+    // middle of the acquisition loop is exactly the kind of latency spike the
+    // timing campaign is meant to detect, and it would be self-inflicted.
+    stats->timing.reserve(total_triggers + 4);
+
     int pps_fd = open("/dev/pps0", O_RDWR);
     if (pps_fd < 0)
     {
@@ -672,17 +714,70 @@ void producer_thread(CameraPtr                      cam0,
         std::cout << "[THREAD 1] Acquisition loop armed.\n";
 
         pps_info_t      info;
-        struct timespec timeout = {2, 0};
-        uint64_t        next_index    = 1;
-        bool            first_frame   = true;
-        bool            geometry_bad  = false;
+        struct timespec timeout      = {2, 0};
+        uint64_t        next_index   = 1;
+        bool            first_frame  = true;
+        bool            geometry_bad = false;
+
+        // Device frame identifiers are per-camera free-running counters. They
+        // do not reset at BeginAcquisition and the two sensors were observed
+        // starting two frames apart, so only the increment within one camera
+        // carries meaning; comparing absolute values across sensors does not.
+        int64_t  last_fid[2]   = {-1, -1};
+        uint64_t gap_reports   = 0;
+        auto     last_beat     = std::chrono::steady_clock::now();
+        const auto beat_period = std::chrono::seconds(60);
+
+        auto readChunks = [&](ImagePtr img, int cam, TimingRecord& rec) {
+            if (!cams[0].chunk_frame_id) return;
+            try
+            {
+                const ChunkData& cd = img->GetChunkData();
+                const int64_t  fid  = cd.GetFrameID();
+                const uint64_t dts  = cd.GetTimestamp();
+
+                if (cam == 0) { rec.cam0_frame_id = fid; rec.cam0_dev_ts = dts; }
+                else          { rec.cam1_frame_id = fid; rec.cam1_dev_ts = dts; }
+
+                // A gap here is the one loss the application cannot otherwise
+                // see: a frame the sensor exposed and the driver discarded
+                // before GetNextImage was ever offered it.
+                if (last_fid[cam] >= 0)
+                {
+                    const int64_t delta = fid - last_fid[cam];
+                    if (delta > 1)
+                    {
+                        stats->fid_gaps.fetch_add(static_cast<uint64_t>(delta - 1));
+                        if (gap_reports < 20)
+                        {
+                            ++gap_reports;
+                            std::cerr << "[TRANSPORT] cam" << cam << " frame id jumped by "
+                                      << delta << " at index " << rec.index << ": "
+                                      << (delta - 1) << " frame(s) lost below the API.\n";
+                        }
+                    }
+                }
+                last_fid[cam] = fid;
+            }
+            catch (Spinnaker::Exception&)
+            {
+                // Chunk data is not always retrievable from an incomplete
+                // buffer. Silent: the frame is already accounted for.
+            }
+        };
 
         // One trigger event: fire both sensors, retrieve both frames, and
         // either push the pair or account for its loss. A pair is pushed only
         // if both halves are complete, a half-pair being useless for the
         // stereo product and merely a way to de-align the archive.
-        auto fireOnce = [&](uint64_t index, uint64_t ts_ns) {
+        auto fireOnce = [&](uint64_t index, uint64_t ts_ns, uint64_t anchor_ns) {
             stats->triggers_issued.fetch_add(1);
+
+            TimingRecord rec;
+            rec.index         = index;
+            rec.pps_anchor_ns = anchor_ns;
+            rec.planned_ns    = ts_ns;
+            rec.trigger_ns    = nowRealtimeNs();
 
             if (cfg.trigger == "software")
             {
@@ -696,6 +791,10 @@ void producer_thread(CameraPtr                      cam0,
             {
                 ImagePtr img0 = cam0->GetNextImage(1000);
                 ImagePtr img1 = cam1->GetNextImage(1000);
+                rec.retrieved_ns = nowRealtimeNs();
+
+                readChunks(img0, 0, rec);
+                readChunks(img1, 1, rec);
 
                 if (!img0->IsIncomplete() && !img1->IsIncomplete())
                 {
@@ -719,25 +818,11 @@ void producer_thread(CameraPtr                      cam0,
                             geometry_bad = true;
                             keep_running = false;
                         }
-
-                        if (cams[0].chunk_frame_id)
-                        {
-                            try
-                            {
-                                const ChunkData& c0 = img0->GetChunkData();
-                                const ChunkData& c1 = img1->GetChunkData();
-                                std::cout << "[THREAD 1] Chunk data live: cam0 FrameID "
-                                          << c0.GetFrameID() << " timestamp "
-                                          << c0.GetTimestamp() << ", cam1 FrameID "
-                                          << c1.GetFrameID() << " timestamp "
-                                          << c1.GetTimestamp() << ".\n";
-                            }
-                            catch (Spinnaker::Exception& e)
-                            {
-                                std::cerr << "[THREAD 1] Chunk data unreadable: " << e.what()
-                                          << "\n";
-                            }
-                        }
+                        std::cout << "[THREAD 1] Chunk data: cam0 frame id " << rec.cam0_frame_id
+                                  << ", cam1 frame id " << rec.cam1_frame_id << ", device skew "
+                                  << (static_cast<double>(rec.cam0_dev_ts) -
+                                      static_cast<double>(rec.cam1_dev_ts)) / 1.0e6
+                                  << " ms.\n";
                     }
 
                     if (!geometry_bad)
@@ -746,12 +831,14 @@ void producer_thread(CameraPtr                      cam0,
                                      static_cast<const uint8_t*>(img1->GetData()),
                                      ts_ns, index);
                         stats->frames_pushed.fetch_add(1);
+                        rec.status = 0;
                     }
                 }
                 else
                 {
                     stats->incomplete.fetch_add(1);
                     stats->recordMissing(index);
+                    rec.status = 1;
                 }
 
                 img0 = nullptr;
@@ -759,6 +846,8 @@ void producer_thread(CameraPtr                      cam0,
             }
             catch (Spinnaker::Exception& e)
             {
+                rec.retrieved_ns = nowRealtimeNs();
+                rec.status       = 2;
                 stats->retrieval_errors.fetch_add(1);
                 stats->recordMissing(index);
                 if (keep_running)
@@ -766,6 +855,8 @@ void producer_thread(CameraPtr                      cam0,
                     std::cerr << "[RETRIEVAL] index " << index << ": " << e.what() << "\n";
                 }
             }
+
+            stats->timing.push_back(rec);
         };
 
         while (keep_running && next_index <= total_triggers)
@@ -782,7 +873,21 @@ void producer_thread(CameraPtr                      cam0,
                 static_cast<uint64_t>(info.assert_timestamp.tv_nsec);
 
             // Frame A, on the second boundary.
-            fireOnce(next_index++, t_base_ns);
+            fireOnce(next_index++, t_base_ns, t_base_ns);
+
+            // A burst of five thousand seconds that prints nothing until it
+            // ends is a burst whose failure is discovered ninety minutes late.
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_beat >= beat_period)
+            {
+                last_beat = now;
+                std::cout << "[BEAT] index " << (next_index - 1) << "/" << total_triggers
+                          << ", written " << stats->frames_written.load()
+                          << ", buffer " << buffer->occupancy() << "/" << buffer->capacity()
+                          << " (peak " << buffer->highWater() << ")"
+                          << ", incomplete " << stats->incomplete.load()
+                          << ", transport gaps " << stats->fid_gaps.load() << std::endl;
+            }
 
             if (!keep_running || next_index > total_triggers) break;
 
@@ -793,14 +898,19 @@ void producer_thread(CameraPtr                      cam0,
             // from the PPS edge. Retrieval latency is therefore added to the
             // half-period, producing alternating intervals around 510 and
             // 490 ms. The timestamp written to the archive nevertheless claims
-            // an exact +500 ms.
+            // an exact +500 ms. The timing record now measures this directly.
             auto target = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
             std::this_thread::sleep_until(target);
 
             if (!keep_running) break;
 
-            fireOnce(next_index++, t_base_ns + 500000000ULL);
+            fireOnce(next_index++, t_base_ns + 500000000ULL, t_base_ns);
         }
+
+        // Read before EndAcquisition: the stream node map reports the counters
+        // of the acquisition still in progress.
+        readStreamCounters(cam0, stats->stream[0]);
+        readStreamCounters(cam1, stats->stream[1]);
 
         cam0->EndAcquisition();
         cam1->EndAcquisition();
@@ -809,6 +919,9 @@ void producer_thread(CameraPtr                      cam0,
     {
         std::cerr << "[PIPELINE] " << e.what() << "\n";
     }
+
+    stats->buffer_high_water.store(buffer->highWater());
+    stats->buffer_capacity.store(buffer->capacity());
 
     time_pps_destroy(pps_handle);
     close(pps_fd);
@@ -973,6 +1086,7 @@ int main(int argc, char** argv)
 
         writeSummary(burst_path + "/summary.json", cfg, *stats, wall_s, payload, cams.size(),
                      completed);
+        writeTimingCsv(burst_path + "/timing.csv", stats->timing);
 
         std::cout << "\n[SUMMARY] " << stats->triggers_issued.load() << " triggers, "
                   << stats->frames_pushed.load() << " pushed, "
@@ -985,6 +1099,33 @@ int main(int argc, char** argv)
                   << (static_cast<double>(stats->frames_written.load()) *
                       static_cast<double>(payload) * cams.size() / wall_s / 1e6)
                   << " MB/s mean\n";
+        std::cout << "[SUMMARY] transport frame id gaps " << stats->fid_gaps.load()
+                  << ", ring buffer peak " << stats->buffer_high_water.load() << "/"
+                  << stats->buffer_capacity.load() << " frames\n";
+        for (int c = 0; c < 2; ++c)
+        {
+            std::cout << "[SUMMARY] cam" << c << " transport: started "
+                      << stats->stream[c].started << ", delivered "
+                      << stats->stream[c].delivered << ", lost " << stats->stream[c].lost
+                      << ", incomplete " << stats->stream[c].incomplete << ", dropped "
+                      << stats->stream[c].dropped << "\n";
+        }
+
+        {
+            const IntervalStats iv = computeIntervals(stats->timing);
+            double   skew_mean = 0.0, skew_sd = 0.0;
+            uint64_t skew_n = 0;
+            computeDeviceSkew(stats->timing, skew_mean, skew_sd, skew_n);
+
+            std::cout << "[CADENCE] " << iv.count << " intervals, mean " << iv.mean_ms
+                      << " ms, sd " << iv.sd_ms << " ms, range [" << iv.min_ms << ", "
+                      << iv.max_ms << "]\n";
+            std::cout << "[CADENCE] A to B " << iv.mean_a_to_b_ms << " ms, B to A "
+                      << iv.mean_b_to_a_ms << " ms (both should be 500)\n";
+            std::cout << "[CADENCE] device skew mean " << skew_mean << " ms, sd " << skew_sd
+                      << " ms over " << skew_n << " frames\n";
+        }
+
         std::cout << "[SUMMARY] completed=" << (completed ? "true" : "false") << ", burst at "
                   << burst_path << "\n";
 

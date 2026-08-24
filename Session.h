@@ -260,6 +260,42 @@ struct CameraInfo
 };
 
 // ---------------------------------------------------------------------------
+// Per-frame timing record
+// ---------------------------------------------------------------------------
+//
+// One entry per trigger, accumulated in a pre-reserved vector and written to
+// disk only after the burst ends. Recording is deliberately kept off the
+// critical path: appending a line to a file four times a second would be
+// harmless in itself, but the measurement must not perturb what it measures.
+
+struct TimingRecord
+{
+    uint64_t index         = 0;
+    uint64_t pps_anchor_ns = 0;   // PPS assert, kernel timestamp
+    uint64_t planned_ns    = 0;   // the instant written into the archive
+    uint64_t trigger_ns    = 0;   // CLOCK_REALTIME immediately before firing
+    uint64_t retrieved_ns  = 0;   // CLOCK_REALTIME once both frames are in hand
+    int64_t  cam0_frame_id = -1;
+    int64_t  cam1_frame_id = -1;
+    uint64_t cam0_dev_ts   = 0;
+    uint64_t cam1_dev_ts   = 0;
+    int      status        = 0;   // 0 written, 1 incomplete, 2 retrieval error
+};
+
+// Transport-layer counters, read from the stream node map at the end of the
+// burst. They see what the application cannot: a frame exposed by the sensor
+// and discarded inside the driver never reaches GetNextImage and is invisible
+// to any count kept above it.
+struct StreamCounters
+{
+    int64_t started    = -1;
+    int64_t delivered  = -1;
+    int64_t lost       = -1;
+    int64_t incomplete = -1;
+    int64_t dropped    = -1;
+};
+
+// ---------------------------------------------------------------------------
 // Burst statistics
 // ---------------------------------------------------------------------------
 //
@@ -279,6 +315,18 @@ struct BurstStats
     std::atomic<uint64_t> retrieval_errors{0};
     std::atomic<uint64_t> pps_timeouts{0};
     std::atomic<uint64_t> write_errors{0};
+
+    // Frames the device exposed and the driver never delivered, inferred
+    // from discontinuities in the device frame identifier.
+    std::atomic<uint64_t> fid_gaps{0};
+
+    // Deepest ring buffer occupancy, and its capacity, captured at shutdown.
+    std::atomic<uint64_t> buffer_high_water{0};
+    std::atomic<uint64_t> buffer_capacity{0};
+
+    // Producer-only until the threads are joined; read by main afterwards.
+    std::vector<TimingRecord> timing;
+    StreamCounters            stream[2];
 
     mutable std::mutex    missing_mtx;
     std::vector<uint64_t> missing_indices;
@@ -422,6 +470,137 @@ inline bool writeManifest(const std::string&             path,
 }
 
 // ---------------------------------------------------------------------------
+// Derived timing statistics
+// ---------------------------------------------------------------------------
+
+struct IntervalStats
+{
+    double   mean_ms = 0.0;
+    double   sd_ms   = 0.0;
+    double   min_ms  = 0.0;
+    double   max_ms  = 0.0;
+    // The loop alternates a frame anchored on the PPS edge with one placed
+    // half a second later. Separating the two legs exposes any asymmetry
+    // between them, which a pooled mean would hide by construction.
+    double   mean_a_to_b_ms = 0.0;
+    double   mean_b_to_a_ms = 0.0;
+    uint64_t count          = 0;
+};
+
+inline IntervalStats computeIntervals(const std::vector<TimingRecord>& t)
+{
+    IntervalStats s;
+    std::vector<double> d;
+    d.reserve(t.size());
+
+    double sum_ab = 0.0, sum_ba = 0.0;
+    uint64_t n_ab = 0, n_ba = 0;
+
+    for (size_t i = 1; i < t.size(); ++i)
+    {
+        if (t[i].trigger_ns == 0 || t[i - 1].trigger_ns == 0) continue;
+        const double ms = static_cast<double>(t[i].trigger_ns - t[i - 1].trigger_ns) / 1.0e6;
+        d.push_back(ms);
+        // Odd trigger ordinals are PPS-anchored, so an interval ending on an
+        // even ordinal is the A to B leg.
+        if (t[i].index % 2 == 0) { sum_ab += ms; ++n_ab; }
+        else                     { sum_ba += ms; ++n_ba; }
+    }
+
+    if (d.empty()) return s;
+
+    s.count  = d.size();
+    s.min_ms = d[0];
+    s.max_ms = d[0];
+    double sum = 0.0;
+    for (double v : d)
+    {
+        sum += v;
+        if (v < s.min_ms) s.min_ms = v;
+        if (v > s.max_ms) s.max_ms = v;
+    }
+    s.mean_ms = sum / static_cast<double>(d.size());
+
+    double var = 0.0;
+    for (double v : d) var += (v - s.mean_ms) * (v - s.mean_ms);
+    s.sd_ms = std::sqrt(var / static_cast<double>(d.size()));
+
+    s.mean_a_to_b_ms = n_ab ? sum_ab / static_cast<double>(n_ab) : 0.0;
+    s.mean_b_to_a_ms = n_ba ? sum_ba / static_cast<double>(n_ba) : 0.0;
+    return s;
+}
+
+// Mean and spread of the offset between the two sensors' own timestamps. A
+// constant offset points to distinct clock origins and is harmless; a varying
+// one is jitter in the software trigger and would be an argument for wiring
+// the hardware line.
+inline void computeDeviceSkew(const std::vector<TimingRecord>& t, double& mean_ms,
+                              double& sd_ms, uint64_t& count)
+{
+    std::vector<double> d;
+    d.reserve(t.size());
+    for (const TimingRecord& r : t)
+    {
+        if (r.status != 0 || r.cam0_dev_ts == 0 || r.cam1_dev_ts == 0) continue;
+        d.push_back((static_cast<double>(r.cam0_dev_ts) -
+                     static_cast<double>(r.cam1_dev_ts)) / 1.0e6);
+    }
+    count = d.size();
+    if (d.empty()) { mean_ms = 0.0; sd_ms = 0.0; return; }
+
+    double sum = 0.0;
+    for (double v : d) sum += v;
+    mean_ms = sum / static_cast<double>(d.size());
+    double var = 0.0;
+    for (double v : d) var += (v - mean_ms) * (v - mean_ms);
+    sd_ms = std::sqrt(var / static_cast<double>(d.size()));
+}
+
+// One row per trigger. Plain CSV rather than JSON: the file holds thousands
+// of rows and is meant to be loaded straight into MATLAB or pandas.
+inline bool writeTimingCsv(const std::string& path, const std::vector<TimingRecord>& t)
+{
+    std::ofstream f(path);
+    if (!f)
+    {
+        std::cerr << "[TIMING] Cannot open " << path << " for writing.\n";
+        return false;
+    }
+
+    f << "index,status,pps_anchor_ns,planned_ns,trigger_ns,retrieved_ns,"
+         "retrieval_latency_us,interval_ms,cam0_frame_id,cam1_frame_id,"
+         "cam0_dev_ts,cam1_dev_ts,dev_skew_us\n";
+
+    for (size_t i = 0; i < t.size(); ++i)
+    {
+        const TimingRecord& r = t[i];
+
+        const double latency_us =
+            (r.retrieved_ns && r.trigger_ns)
+                ? static_cast<double>(r.retrieved_ns - r.trigger_ns) / 1.0e3
+                : 0.0;
+
+        double interval_ms = 0.0;
+        if (i > 0 && r.trigger_ns && t[i - 1].trigger_ns)
+        {
+            interval_ms = static_cast<double>(r.trigger_ns - t[i - 1].trigger_ns) / 1.0e6;
+        }
+
+        const double skew_us =
+            (r.cam0_dev_ts && r.cam1_dev_ts)
+                ? (static_cast<double>(r.cam0_dev_ts) - static_cast<double>(r.cam1_dev_ts)) / 1.0e3
+                : 0.0;
+
+        f << r.index << ',' << r.status << ',' << r.pps_anchor_ns << ',' << r.planned_ns << ','
+          << r.trigger_ns << ',' << r.retrieved_ns << ',' << latency_us << ',' << interval_ms
+          << ',' << r.cam0_frame_id << ',' << r.cam1_frame_id << ',' << r.cam0_dev_ts << ','
+          << r.cam1_dev_ts << ',' << skew_us << '\n';
+    }
+
+    return f.good();
+}
+
+// ---------------------------------------------------------------------------
 // Summary: written after a clean shutdown
 // ---------------------------------------------------------------------------
 //
@@ -469,8 +648,50 @@ inline bool writeSummary(const std::string& path,
     f << "    \"incomplete\": "       << stats.incomplete.load() << ",\n";
     f << "    \"retrieval_errors\": " << stats.retrieval_errors.load() << ",\n";
     f << "    \"pps_timeouts\": "     << stats.pps_timeouts.load() << ",\n";
-    f << "    \"write_errors\": "     << stats.write_errors.load() << "\n";
+    f << "    \"write_errors\": "     << stats.write_errors.load() << ",\n";
+    f << "    \"transport_frame_id_gaps\": " << stats.fid_gaps.load() << "\n";
     f << "  },\n";
+
+    f << "  \"transport_counters\": [\n";
+    for (int c = 0; c < 2; ++c)
+    {
+        f << "    { \"camera\": " << c
+          << ", \"started\": "    << stats.stream[c].started
+          << ", \"delivered\": "  << stats.stream[c].delivered
+          << ", \"lost\": "       << stats.stream[c].lost
+          << ", \"incomplete\": " << stats.stream[c].incomplete
+          << ", \"dropped\": "    << stats.stream[c].dropped
+          << " }" << (c == 0 ? "," : "") << "\n";
+    }
+    f << "  ],\n";
+
+    f << "  \"ring_buffer\": {\n";
+    f << "    \"capacity_frames\": "   << stats.buffer_capacity.load() << ",\n";
+    f << "    \"high_water_frames\": " << stats.buffer_high_water.load() << "\n";
+    f << "  },\n";
+
+    {
+        const IntervalStats iv = computeIntervals(stats.timing);
+        double skew_mean = 0.0, skew_sd = 0.0;
+        uint64_t skew_n = 0;
+        computeDeviceSkew(stats.timing, skew_mean, skew_sd, skew_n);
+
+        f << "  \"cadence\": {\n";
+        f << "    \"intervals\": "       << iv.count << ",\n";
+        f << "    \"mean_ms\": "         << iv.mean_ms << ",\n";
+        f << "    \"sd_ms\": "           << iv.sd_ms << ",\n";
+        f << "    \"min_ms\": "          << iv.min_ms << ",\n";
+        f << "    \"max_ms\": "          << iv.max_ms << ",\n";
+        f << "    \"mean_a_to_b_ms\": "  << iv.mean_a_to_b_ms << ",\n";
+        f << "    \"mean_b_to_a_ms\": "  << iv.mean_b_to_a_ms << "\n";
+        f << "  },\n";
+
+        f << "  \"device_skew\": {\n";
+        f << "    \"samples\": " << skew_n << ",\n";
+        f << "    \"mean_ms\": " << skew_mean << ",\n";
+        f << "    \"sd_ms\": "   << skew_sd << "\n";
+        f << "  },\n";
+    }
     f << "  \"mean_write_MBps\": " << mbps << ",\n";
     f << "  \"missing_index_count\": " << missing.size() << ",\n";
     f << "  \"missing_indices\": [";
