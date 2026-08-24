@@ -33,6 +33,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -107,6 +108,387 @@ static double nodeFloat(INodeMap& m, const char* name, double fallback)
     catch (...) { return fallback; }
 }
 
+
+// ---------------------------------------------------------------------------
+// GenICam node writers
+// ---------------------------------------------------------------------------
+// Every setter throws on failure. A camera that silently refuses a setting is
+// worse than one that refuses loudly: the burst would run, look healthy, and
+// carry radiometry nobody chose.
+
+static void setEnum(INodeMap& m, const char* node, const char* value)
+{
+    CEnumerationPtr e = m.GetNode(node);
+    if (!e.IsValid() || !IsAvailable(e) || !IsWritable(e))
+        throw std::runtime_error(std::string("node not writable: ") + node);
+    CEnumEntryPtr entry = e->GetEntryByName(value);
+    if (!entry.IsValid() || !IsAvailable(entry))
+        throw std::runtime_error(std::string("value not available: ") + node + " = " + value);
+    e->SetIntValue(entry->GetValue());
+}
+
+static void setBool(INodeMap& m, const char* node, bool value)
+{
+    CBooleanPtr b = m.GetNode(node);
+    if (!b.IsValid() || !IsAvailable(b) || !IsWritable(b))
+        throw std::runtime_error(std::string("node not writable: ") + node);
+    b->SetValue(value);
+}
+
+// Clamped to the node's own bounds, which depend on the current state of the
+// camera: a value silently rejected out of range would leave the sensor on
+// whatever it held before.
+static double setFloatClamped(INodeMap& m, const char* node, double value)
+{
+    CFloatPtr f = m.GetNode(node);
+    if (!f.IsValid() || !IsAvailable(f) || !IsWritable(f))
+        throw std::runtime_error(std::string("node not writable: ") + node);
+    const double lo = f->GetMin();
+    const double hi = f->GetMax();
+    double v = value;
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    if (v != value)
+    {
+        std::cerr << "[CONFIG] " << node << " clamped from " << value << " to " << v
+                  << " (device range " << lo << " to " << hi << ")\n";
+    }
+    f->SetValue(v);
+    return v;
+}
+
+static void setInt(INodeMap& m, const char* node, int64_t value)
+{
+    CIntegerPtr i = m.GetNode(node);
+    if (!i.IsValid() || !IsAvailable(i) || !IsWritable(i))
+        throw std::runtime_error(std::string("node not writable: ") + node);
+    i->SetValue(value);
+}
+
+static void execCommand(INodeMap& m, const char* node)
+{
+    CCommandPtr c = m.GetNode(node);
+    if (!c.IsValid() || !IsAvailable(c) || !IsWritable(c))
+        throw std::runtime_error(std::string("command not available: ") + node);
+    c->Execute();
+}
+
+// Optional settings: absent on some models or firmware revisions. Reported,
+// never fatal.
+static bool trySetBool(INodeMap& m, const char* node, bool value)
+{
+    try { setBool(m, node, value); return true; }
+    catch (...) { std::cerr << "[CONFIG] optional node skipped: " << node << "\n"; return false; }
+}
+
+static bool trySetEnum(INodeMap& m, const char* node, const char* value)
+{
+    try { setEnum(m, node, value); return true; }
+    catch (...) { std::cerr << "[CONFIG] optional node skipped: " << node << " = " << value
+                            << "\n"; return false; }
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic camera configuration
+// ---------------------------------------------------------------------------
+// Applied identically to both sensors, from a known starting point, so that a
+// burst acquired next year on a replacement camera is comparable with one
+// acquired today. Nothing is inherited from camera flash.
+
+static void configureCamera(CameraPtr pCam, const Config& cfg, CameraInfo& info)
+{
+    INodeMap& m = pCam->GetNodeMap();
+
+    // A factory user set gives a reproducible baseline. Without it the
+    // configuration below sits on top of whatever the last operator, or the
+    // last SpinView session, happened to leave in non-volatile memory.
+    setEnum(m, "UserSetSelector", "Default");
+    execCommand(m, "UserSetLoad");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    info.user_set_loaded = "Default";
+
+    // Geometry and encoding. RAW Bayer 8-bit is the format arbitrated in
+    // Appendix E: one byte per photosite, identical payload to monochrome,
+    // demosaicing deferred to the laboratory.
+    setEnum(m, "PixelFormat", "BayerRG8");
+    trySetBool(m, "IspEnable", false);
+
+    // Gamma is a radiometric non-linearity applied to data destined for
+    // intensity cross-correlation. Disabled outright.
+    trySetBool(m, "GammaEnable", false);
+
+    // Free-running frame rate is meaningless under external triggering and
+    // would otherwise cap the achievable exposure.
+    trySetBool(m, "AcquisitionFrameRateEnable", false);
+    setEnum(m, "AcquisitionMode", "Continuous");
+
+    if (cfg.exposure_auto)
+    {
+        std::cerr << "[CONFIG] WARNING: automatic exposure, gain and white balance left "
+                     "enabled. Luminance will vary frame to frame and the burst is "
+                     "radiometrically unusable for OCM.\n";
+        trySetEnum(m, "ExposureAuto", "Continuous");
+        trySetEnum(m, "GainAuto", "Continuous");
+        trySetEnum(m, "BalanceWhiteAuto", "Continuous");
+    }
+    else
+    {
+        setEnum(m, "ExposureAuto", "Off");
+        setEnum(m, "ExposureMode", "Timed");
+        info.exposure_us = setFloatClamped(m, "ExposureTime", cfg.exposure_us);
+
+        setEnum(m, "GainAuto", "Off");
+        info.gain_db = setFloatClamped(m, "Gain", cfg.gain_db);
+
+        // Per-channel gains alter luminance after demosaicing, so automatic
+        // white balance is a second, slower source of the same corruption.
+        trySetEnum(m, "BalanceWhiteAuto", "Off");
+    }
+
+    // Triggering. Source is set with the mode off, as the node is locked
+    // while triggering is armed.
+    setEnum(m, "TriggerSelector", "FrameStart");
+    setEnum(m, "TriggerMode", "Off");
+
+    if (cfg.trigger == "software")
+    {
+        setEnum(m, "TriggerSource", "Software");
+    }
+    else
+    {
+        // UNVALIDATED. Neither branch has been exercised: the GPIO cabling is
+        // not yet on hand. Line2 is the non-isolated 3.3 V TTL GPIO, which
+        // matches the Raspberry Pi header directly and is the intended first
+        // attempt. Line0 is the opto-isolated input, immune to the ground
+        // loops expected between a Pi and two cameras five metres away on a
+        // coastal roof, but specified for 5 V and therefore marginal when
+        // driven at 3.3 V; it is the reason the 470 ohm resistors sit in the
+        // bill of materials.
+        const char* line = (cfg.trigger == "line2") ? "Line2" : "Line0";
+        setEnum(m, "LineSelector", line);
+        trySetEnum(m, "LineMode", "Input");
+        setEnum(m, "TriggerSource", line);
+        trySetEnum(m, "TriggerActivation", "RisingEdge");
+    }
+
+    // Payload is read before chunk data is enabled, so that it measures the
+    // image alone. Enabling chunks appends metadata to the transport buffer
+    // and inflates PayloadSize; sizing the ring buffer on the inflated figure
+    // would write chunk bytes into the archive behind every frame.
+    info.payload = nodeInt(m, "PayloadSize", 0);
+
+    // Chunk data. The device frame identifier increments by exactly one per
+    // trigger, which turns drop detection from an inference into a
+    // measurement: an index advancing by one while the identifier advances by
+    // two means a frame was exposed and lost in transport without the
+    // application ever seeing it.
+    try
+    {
+        setBool(m, "ChunkModeActive", true);
+        setEnum(m, "ChunkSelector", "FrameID");
+        setBool(m, "ChunkEnable", true);
+        info.chunk_frame_id = true;
+
+        setEnum(m, "ChunkSelector", "Timestamp");
+        setBool(m, "ChunkEnable", true);
+        info.chunk_timestamp = true;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[CONFIG] chunk data unavailable: " << e.what() << "\n";
+    }
+
+    info.transport_payload = nodeInt(m, "PayloadSize", 0);
+
+    // Transport buffer pool. The factory value of nine is not a decision; it
+    // is simply what the driver defaults to. Sixteen buffers hold eight
+    // seconds at 2 Hz, which covers a producer stall without competing with
+    // the ring buffer for memory.
+    try
+    {
+        INodeMap& sm = pCam->GetTLStreamNodeMap();
+        setEnum(sm, "StreamBufferCountMode", "Manual");
+        setInt(sm, "StreamBufferCountManual", cfg.stream_buffers);
+        setEnum(sm, "StreamBufferHandlingMode", "OldestFirst");
+        info.stream_buffer_count = nodeInt(sm, "StreamBufferCountResult", 0);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[CONFIG] stream buffer configuration failed: " << e.what() << "\n";
+    }
+
+    // Arm last.
+    setEnum(m, "TriggerMode", "On");
+
+    // Read back everything that goes into the manifest, from the camera and
+    // not from the request: what is recorded must be what the sensor holds.
+    info.serial             = nodeStr(m, "DeviceSerialNumber");
+    info.model              = nodeStr(m, "DeviceModelName");
+    info.firmware           = nodeStr(m, "DeviceFirmwareVersion");
+    info.pixel_format       = nodeStr(m, "PixelFormat");
+    info.shutter_mode       = nodeStr(m, "SensorShutterMode");
+    info.exposure_auto      = nodeStr(m, "ExposureAuto");
+    info.gain_auto          = nodeStr(m, "GainAuto");
+    info.white_balance_auto = nodeStr(m, "BalanceWhiteAuto");
+    info.gamma_enable       = nodeStr(m, "GammaEnable");
+    info.trigger_source     = nodeStr(m, "TriggerSource");
+    info.width              = nodeInt(m, "Width", 0);
+    info.height             = nodeInt(m, "Height", 0);
+    info.exposure_us        = nodeFloat(m, "ExposureTime", info.exposure_us);
+    info.gain_db            = nodeFloat(m, "Gain", info.gain_db);
+}
+
+// ---------------------------------------------------------------------------
+// Camera session
+// ---------------------------------------------------------------------------
+// Owns the camera list and both device handles for the lifetime of one burst.
+// A single enumeration pass now serves both the manifest and the acquisition:
+// the previous arrangement initialised each sensor twice, once to read its
+// payload and once to acquire, costing several seconds and leaving two places
+// where configuration could diverge. Release is explicit and happens before
+// System::ReleaseInstance, a lingering CameraPtr being the documented cause of
+// the Spinnaker -1004 raised at shutdown.
+
+class CameraSession
+{
+public:
+    explicit CameraSession(SystemPtr system) : system_(system) {}
+    ~CameraSession() { release(); }
+
+    CameraSession(const CameraSession&)            = delete;
+    CameraSession& operator=(const CameraSession&) = delete;
+
+    bool open(const Config& cfg, std::string& err)
+    {
+        list_ = system_->GetCameras();
+        const unsigned int n = list_.GetSize();
+        if (n < 2)
+        {
+            err = "incomplete topology: " + std::to_string(n) + " camera(s), 2 required";
+            return false;
+        }
+
+        const bool by_serial = !cfg.cam0_serial.empty() && !cfg.cam1_serial.empty();
+        if (!by_serial)
+        {
+            std::cerr << "[WARN] No serial numbers supplied: falling back to USB enumeration "
+                         "order, which is not stable across boots. The two fields of view may "
+                         "transpose between runs.\n";
+        }
+        if (by_serial && cfg.cam0_serial == cfg.cam1_serial)
+        {
+            err = "--cam0-serial and --cam1-serial are identical";
+            return false;
+        }
+
+        const std::string wanted[2] = {cfg.cam0_serial, cfg.cam1_serial};
+        info_.resize(2);
+
+        for (int role = 0; role < 2; ++role)
+        {
+            if (by_serial)
+            {
+                try { cams_[role] = list_.GetBySerial(wanted[role]); }
+                catch (Spinnaker::Exception&) { cams_[role] = nullptr; }
+                if (!cams_[role].IsValid())
+                {
+                    err = "no camera with serial " + wanted[role] + " is attached";
+                    return false;
+                }
+            }
+            else
+            {
+                cams_[role] = list_.GetByIndex(static_cast<unsigned int>(role));
+            }
+
+            info_[role].role = role;
+
+            try
+            {
+                cams_[role]->Init();
+                configureCamera(cams_[role], cfg, info_[role]);
+            }
+            catch (Spinnaker::Exception& e)
+            {
+                err = std::string("camera configuration failed: ") + e.what();
+                return false;
+            }
+            catch (const std::exception& e)
+            {
+                err = std::string("camera configuration failed: ") + e.what();
+                return false;
+            }
+
+            if (info_[role].payload <= 0)
+            {
+                err = "camera reports a null payload size";
+                return false;
+            }
+            if (info_[role].serial.empty() || info_[role].serial.find('<') != std::string::npos)
+            {
+                err = "camera at role " + std::to_string(role) +
+                      " does not report a usable serial number";
+                return false;
+            }
+        }
+
+        if (info_[0].payload != info_[1].payload)
+        {
+            err = "the two cameras report different image payloads (" +
+                  std::to_string(info_[0].payload) + " and " +
+                  std::to_string(info_[1].payload) + ")";
+            return false;
+        }
+        if (info_[0].pixel_format != info_[1].pixel_format ||
+            info_[0].width != info_[1].width || info_[0].height != info_[1].height)
+        {
+            err = "the two cameras disagree on geometry or pixel format";
+            return false;
+        }
+
+        open_ = true;
+        return true;
+    }
+
+    void release()
+    {
+        // Idempotent: early-return paths call it explicitly, and the
+        // destructor calls it again after System::ReleaseInstance has already
+        // run.
+        if (released_) return;
+        released_ = true;
+
+        for (int r = 0; r < 2; ++r)
+        {
+            if (cams_[r].IsValid())
+            {
+                try
+                {
+                    if (cams_[r]->IsInitialized()) cams_[r]->DeInit();
+                }
+                catch (Spinnaker::Exception& e)
+                {
+                    std::cerr << "[RELEASE] " << e.what() << "\n";
+                }
+            }
+            cams_[r] = nullptr;
+        }
+        list_.Clear();
+        open_ = false;
+    }
+
+    const std::vector<CameraInfo>& info() const { return info_; }
+    CameraPtr                      cam(int role) { return cams_[role]; }
+
+private:
+    SystemPtr               system_;
+    CameraList              list_;
+    CameraPtr               cams_[2];
+    std::vector<CameraInfo> info_;
+    bool                    open_     = false;
+    bool                    released_ = false;
+};
+
 // ---------------------------------------------------------------------------
 // System clock validity
 // ---------------------------------------------------------------------------
@@ -124,137 +506,6 @@ static bool clockIsSynchronized()
     const int state = adjtimex(&tx);
     if (state < 0) return false;
     return (state != TIME_ERROR) && ((tx.status & STA_UNSYNC) == 0);
-}
-
-// ---------------------------------------------------------------------------
-// Camera inventory and role binding
-// ---------------------------------------------------------------------------
-
-static bool inspectCameras(SystemPtr                system,
-                           const Config&            cfg,
-                           std::vector<CameraInfo>& out,
-                           std::string&             err)
-{
-    out.clear();
-
-    CameraList camList = system->GetCameras();
-    const unsigned int n = camList.GetSize();
-
-    if (n < 2)
-    {
-        err = "incomplete topology: " + std::to_string(n) + " camera(s) enumerated, 2 required";
-        camList.Clear();
-        return false;
-    }
-
-    const bool bind_by_serial = !cfg.cam0_serial.empty() && !cfg.cam1_serial.empty();
-    if (!bind_by_serial)
-    {
-        std::cerr << "[WARN] No serial numbers supplied: falling back to USB enumeration "
-                     "order. That order is not stable across boots and the two fields of "
-                     "view may transpose between runs. Use --cam0-serial / --cam1-serial "
-                     "for any acquisition whose output will be kept.\n";
-    }
-    if (bind_by_serial && cfg.cam0_serial == cfg.cam1_serial)
-    {
-        err = "--cam0-serial and --cam1-serial are identical";
-        camList.Clear();
-        return false;
-    }
-
-    const std::string wanted[2] = {cfg.cam0_serial, cfg.cam1_serial};
-
-    for (int role = 0; role < 2; ++role)
-    {
-        CameraPtr pCam = nullptr;
-
-        if (bind_by_serial)
-        {
-            try
-            {
-                pCam = camList.GetBySerial(wanted[role]);
-            }
-            catch (Spinnaker::Exception&)
-            {
-                pCam = nullptr;
-            }
-            if (!pCam.IsValid())
-            {
-                err = "no camera with serial " + wanted[role] + " is attached";
-                camList.Clear();
-                return false;
-            }
-        }
-        else
-        {
-            pCam = camList.GetByIndex(static_cast<unsigned int>(role));
-        }
-
-        CameraInfo info;
-        info.role = role;
-
-        try
-        {
-            pCam->Init();
-            INodeMap& m = pCam->GetNodeMap();
-
-            info.serial        = nodeStr(m, "DeviceSerialNumber");
-            info.model         = nodeStr(m, "DeviceModelName");
-            info.firmware      = nodeStr(m, "DeviceFirmwareVersion");
-            info.pixel_format  = nodeStr(m, "PixelFormat");
-            info.shutter_mode  = nodeStr(m, "SensorShutterMode");
-            info.exposure_auto = nodeStr(m, "ExposureAuto");
-            info.gain_auto     = nodeStr(m, "GainAuto");
-            info.width         = nodeInt(m, "Width", 0);
-            info.height        = nodeInt(m, "Height", 0);
-            info.payload       = nodeInt(m, "PayloadSize", 0);
-            info.exposure_us   = nodeFloat(m, "ExposureTime", 0.0);
-            info.gain_db       = nodeFloat(m, "Gain", 0.0);
-
-            pCam->DeInit();
-        }
-        catch (Spinnaker::Exception& e)
-        {
-            err = std::string("camera inspection failed: ") + e.what();
-            pCam = nullptr;
-            camList.Clear();
-            return false;
-        }
-
-        pCam = nullptr;
-
-        if (info.payload <= 0)
-        {
-            err = "camera " + info.serial + " reports a null payload size";
-            camList.Clear();
-            return false;
-        }
-
-        // The serial ends up in a directory name and is the only durable
-        // handle on physical identity, so an unreadable one is fatal rather
-        // than cosmetic.
-        if (info.serial.empty() || info.serial.find('<') != std::string::npos)
-        {
-            err = "camera at role " + std::to_string(role) +
-                  " does not report a usable serial number";
-            camList.Clear();
-            return false;
-        }
-
-        out.push_back(info);
-    }
-
-    camList.Clear();
-
-    if (out[0].payload != out[1].payload)
-    {
-        err = "the two cameras report different payload sizes (" +
-              std::to_string(out[0].payload) + " and " + std::to_string(out[1].payload) +
-              "): their configuration diverges and stereo frames would not match";
-        return false;
-    }
-
-    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +618,8 @@ void consumer_thread(std::shared_ptr<RingBuffer>     buffer,
 // THREAD 1: PRODUCER
 // ---------------------------------------------------------------------------
 
-void producer_thread(SystemPtr                      system,
+void producer_thread(CameraPtr                      cam0,
+                     CameraPtr                      cam1,
                      std::shared_ptr<RingBuffer>    buffer,
                      std::shared_ptr<BurstStats>    stats,
                      Config                         cfg,
@@ -382,8 +634,18 @@ void producer_thread(SystemPtr                      system,
     }
 
     const uint64_t total_triggers = cfg.total_triggers();
+    const int64_t  expected_bytes = cams[0].payload;
+
     std::cout << "[THREAD 1] Producer running on core 2. Target: " << total_triggers
-              << " triggers at " << kSamplingRateHz << " Hz.\n";
+              << " triggers at " << kSamplingRateHz << " Hz, trigger source " << cfg.trigger
+              << ".\n";
+
+    if (cfg.trigger != "software")
+    {
+        std::cerr << "[THREAD 1] WARNING: hardware triggering selected. This path has never "
+                     "been exercised; if no pulse reaches the cameras the loop will time out "
+                     "on every retrieval.\n";
+    }
 
     int pps_fd = open("/dev/pps0", O_RDWR);
     if (pps_fd < 0)
@@ -402,145 +664,150 @@ void producer_thread(SystemPtr                      system,
         return;
     }
 
+    try
     {
-        CameraList camList = system->GetCameras();
+        cam0->BeginAcquisition();
+        cam1->BeginAcquisition();
 
-        CameraPtr cam0 = nullptr;
-        CameraPtr cam1 = nullptr;
-        try
-        {
-            cam0 = camList.GetBySerial(cams[0].serial);
-            cam1 = camList.GetBySerial(cams[1].serial);
-        }
-        catch (Spinnaker::Exception& e)
-        {
-            std::cerr << "[CRITICAL] Serial binding failed: " << e.what() << "\n";
-        }
+        std::cout << "[THREAD 1] Acquisition loop armed.\n";
 
-        if (!cam0.IsValid() || !cam1.IsValid())
-        {
-            std::cerr << "[CRITICAL] Cameras " << cams[0].serial << " and " << cams[1].serial
-                      << " could not both be bound.\n";
-            camList.Clear();
-            time_pps_destroy(pps_handle);
-            close(pps_fd);
-            buffer->shutdown();
-            return;
-        }
+        pps_info_t      info;
+        struct timespec timeout = {2, 0};
+        uint64_t        next_index    = 1;
+        bool            first_frame   = true;
+        bool            geometry_bad  = false;
 
-        try
-        {
-            cam0->Init();
-            cam1->Init();
+        // One trigger event: fire both sensors, retrieve both frames, and
+        // either push the pair or account for its loss. A pair is pushed only
+        // if both halves are complete, a half-pair being useless for the
+        // stereo product and merely a way to de-align the archive.
+        auto fireOnce = [&](uint64_t index, uint64_t ts_ns) {
+            stats->triggers_issued.fetch_add(1);
 
-            cam0->TriggerMode.SetValue(TriggerModeEnums::TriggerMode_Off);
-            cam0->TriggerSource.SetValue(TriggerSourceEnums::TriggerSource_Software);
-            cam0->TriggerMode.SetValue(TriggerModeEnums::TriggerMode_On);
-
-            cam1->TriggerMode.SetValue(TriggerModeEnums::TriggerMode_Off);
-            cam1->TriggerSource.SetValue(TriggerSourceEnums::TriggerSource_Software);
-            cam1->TriggerMode.SetValue(TriggerModeEnums::TriggerMode_On);
-
-            cam0->BeginAcquisition();
-            cam1->BeginAcquisition();
-
-            std::cout << "[THREAD 1] Acquisition loop armed.\n";
-
-            pps_info_t      info;
-            struct timespec timeout = {2, 0};
-            uint64_t        next_index = 1;
-
-            // One trigger event: fire both sensors, retrieve both frames, and
-            // either push the pair or account for its loss. A pair is pushed
-            // only if both halves are complete, a half-pair being useless for
-            // the stereo product and merely a way to de-align the archive.
-            auto fireOnce = [&](uint64_t index, uint64_t ts_ns) {
-                stats->triggers_issued.fetch_add(1);
-
+            if (cfg.trigger == "software")
+            {
                 cam0->TriggerSoftware.Execute();
                 cam1->TriggerSoftware.Execute();
+            }
+            // Hardware modes need no software action: the pulse arrives on the
+            // selected line. UNVALIDATED.
 
-                try
+            try
+            {
+                ImagePtr img0 = cam0->GetNextImage(1000);
+                ImagePtr img1 = cam1->GetNextImage(1000);
+
+                if (!img0->IsIncomplete() && !img1->IsIncomplete())
                 {
-                    ImagePtr img0 = cam0->GetNextImage(1000);
-                    ImagePtr img1 = cam1->GetNextImage(1000);
+                    // Enabling chunk data inflates the transport payload. The
+                    // image itself must still measure what the manifest
+                    // claims, or every archived frame would carry trailing
+                    // metadata that no reader expects.
+                    if (first_frame)
+                    {
+                        first_frame = false;
+                        const size_t got0 = img0->GetImageSize();
+                        const size_t got1 = img1->GetImageSize();
+                        std::cout << "[THREAD 1] First frame: image size " << got0 << " and "
+                                  << got1 << " bytes, expected " << expected_bytes << ".\n";
+                        if (static_cast<int64_t>(got0) != expected_bytes ||
+                            static_cast<int64_t>(got1) != expected_bytes)
+                        {
+                            std::cerr << "[CRITICAL] Image size disagrees with the declared "
+                                         "payload. Aborting rather than writing frames whose "
+                                         "geometry the manifest misstates.\n";
+                            geometry_bad = true;
+                            keep_running = false;
+                        }
 
-                    if (!img0->IsIncomplete() && !img1->IsIncomplete())
+                        if (cams[0].chunk_frame_id)
+                        {
+                            try
+                            {
+                                const ChunkData& c0 = img0->GetChunkData();
+                                const ChunkData& c1 = img1->GetChunkData();
+                                std::cout << "[THREAD 1] Chunk data live: cam0 FrameID "
+                                          << c0.GetFrameID() << " timestamp "
+                                          << c0.GetTimestamp() << ", cam1 FrameID "
+                                          << c1.GetFrameID() << " timestamp "
+                                          << c1.GetTimestamp() << ".\n";
+                            }
+                            catch (Spinnaker::Exception& e)
+                            {
+                                std::cerr << "[THREAD 1] Chunk data unreadable: " << e.what()
+                                          << "\n";
+                            }
+                        }
+                    }
+
+                    if (!geometry_bad)
                     {
                         buffer->push(static_cast<const uint8_t*>(img0->GetData()),
                                      static_cast<const uint8_t*>(img1->GetData()),
                                      ts_ns, index);
                         stats->frames_pushed.fetch_add(1);
                     }
-                    else
-                    {
-                        stats->incomplete.fetch_add(1);
-                        stats->recordMissing(index);
-                    }
-
-                    img0 = nullptr;
-                    img1 = nullptr;
                 }
-                catch (Spinnaker::Exception& e)
+                else
                 {
-                    stats->retrieval_errors.fetch_add(1);
+                    stats->incomplete.fetch_add(1);
                     stats->recordMissing(index);
-                    if (keep_running)
-                    {
-                        std::cerr << "[RETRIEVAL] index " << index << ": " << e.what() << "\n";
-                    }
                 }
-            };
 
-            while (keep_running && next_index <= total_triggers)
+                img0 = nullptr;
+                img1 = nullptr;
+            }
+            catch (Spinnaker::Exception& e)
             {
-                if (time_pps_fetch(pps_handle, PPS_TSFMT_TSPEC, &info, &timeout) < 0)
+                stats->retrieval_errors.fetch_add(1);
+                stats->recordMissing(index);
+                if (keep_running)
                 {
-                    stats->pps_timeouts.fetch_add(1);
-                    if (keep_running) std::cerr << "[WARN] PPS timeout.\n";
-                    continue;
+                    std::cerr << "[RETRIEVAL] index " << index << ": " << e.what() << "\n";
                 }
+            }
+        };
 
-                const uint64_t t_base_ns =
-                    (static_cast<uint64_t>(info.assert_timestamp.tv_sec) * 1000000000ULL) +
-                    static_cast<uint64_t>(info.assert_timestamp.tv_nsec);
-
-                // Frame A, on the second boundary.
-                fireOnce(next_index++, t_base_ns);
-
-                if (!keep_running || next_index > total_triggers) break;
-
-                // Frame B, half a second later.
-                //
-                // KNOWN DEFECT, scheduled for a later patch: the delay is
-                // measured from now(), that is from the moment frame A was
-                // retrieved, not from the PPS edge. Retrieval latency is
-                // therefore added to the half-period, producing alternating
-                // intervals around 510 and 490 ms. The timestamp written to
-                // the archive nevertheless claims an exact +500 ms.
-                auto target = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-                std::this_thread::sleep_until(target);
-
-                if (!keep_running) break;
-
-                fireOnce(next_index++, t_base_ns + 500000000ULL);
+        while (keep_running && next_index <= total_triggers)
+        {
+            if (time_pps_fetch(pps_handle, PPS_TSFMT_TSPEC, &info, &timeout) < 0)
+            {
+                stats->pps_timeouts.fetch_add(1);
+                if (keep_running) std::cerr << "[WARN] PPS timeout.\n";
+                continue;
             }
 
-            cam0->TriggerMode.SetValue(TriggerModeEnums::TriggerMode_Off);
-            cam1->TriggerMode.SetValue(TriggerModeEnums::TriggerMode_Off);
-            cam0->EndAcquisition();
-            cam1->EndAcquisition();
-            cam0->DeInit();
-            cam1->DeInit();
-        }
-        catch (Spinnaker::Exception& e)
-        {
-            std::cerr << "[PIPELINE] " << e.what() << "\n";
+            const uint64_t t_base_ns =
+                (static_cast<uint64_t>(info.assert_timestamp.tv_sec) * 1000000000ULL) +
+                static_cast<uint64_t>(info.assert_timestamp.tv_nsec);
+
+            // Frame A, on the second boundary.
+            fireOnce(next_index++, t_base_ns);
+
+            if (!keep_running || next_index > total_triggers) break;
+
+            // Frame B, half a second later.
+            //
+            // KNOWN DEFECT, scheduled for a later patch: the delay is measured
+            // from now(), that is from the moment frame A was retrieved, not
+            // from the PPS edge. Retrieval latency is therefore added to the
+            // half-period, producing alternating intervals around 510 and
+            // 490 ms. The timestamp written to the archive nevertheless claims
+            // an exact +500 ms.
+            auto target = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            std::this_thread::sleep_until(target);
+
+            if (!keep_running) break;
+
+            fireOnce(next_index++, t_base_ns + 500000000ULL);
         }
 
-        cam0 = nullptr;
-        cam1 = nullptr;
-        camList.Clear();
+        cam0->EndAcquisition();
+        cam1->EndAcquisition();
+    }
+    catch (Spinnaker::Exception& e)
+    {
+        std::cerr << "[PIPELINE] " << e.what() << "\n";
     }
 
     time_pps_destroy(pps_handle);
@@ -575,126 +842,156 @@ int main(int argc, char** argv)
     }
 
     SystemPtr system = System::GetInstance();
+    int       exit_code = 1;
 
-    std::vector<CameraInfo> cams;
-    std::string             err;
-    if (!inspectCameras(system, cfg, cams, err))
     {
-        std::cerr << "[FATAL] " << err << "\n";
-        system->ReleaseInstance();
-        return 1;
-    }
+        // Scoped so that the session releases both cameras before
+        // ReleaseInstance is called below.
+        CameraSession session(system);
+        std::string   err;
 
-    const int64_t  payload  = cams[0].payload;
-    const uint64_t required = cfg.total_triggers() * static_cast<uint64_t>(payload) * cams.size();
-
-    std::cout << "\n[PLAN] " << cfg.duration_s << " s, " << cfg.total_triggers()
-              << " triggers, " << payload << " B/frame, " << cams.size() << " cameras -> "
-              << (required / 1e9) << " GB\n";
-    for (const CameraInfo& c : cams)
-    {
-        std::cout << "[PLAN] cam" << c.role << " serial " << c.serial << ", " << c.width << "x"
-                  << c.height << " " << c.pixel_format << ", exposure " << c.exposure_us
-                  << " us (" << c.exposure_auto << "), gain " << c.gain_db << " dB ("
-                  << c.gain_auto << ")\n";
-    }
-
-    if (!fs::exists(cfg.output_root))
-    {
-        std::cerr << "[FATAL] Output root " << cfg.output_root << " does not exist.\n";
-        system->ReleaseInstance();
-        return 1;
-    }
-
-    if (!checkFreeSpace(cfg.output_root, required, err))
-    {
-        std::cerr << "[FATAL] " << err << "\n";
-        system->ReleaseInstance();
-        return 1;
-    }
-
-    if (cfg.dry_run)
-    {
-        std::cout << "[DRY RUN] Configuration valid, cameras bound, space sufficient. "
-                     "Nothing written, nothing acquired.\n";
-        system->ReleaseInstance();
-        return 0;
-    }
-
-    // ---- Burst directory tree ----
-
-    const std::string burst_id   = utcStamp(true);
-    const std::string burst_path = cfg.output_root + "/" + burst_id;
-
-    std::vector<std::string> cam_dirs;
-    try
-    {
-        if (fs::exists(burst_path))
+        if (!session.open(cfg, err))
         {
-            std::cerr << "[FATAL] Burst directory " << burst_path << " already exists.\n";
+            std::cerr << "[FATAL] " << err << "\n";
+            session.release();
             system->ReleaseInstance();
             return 1;
         }
-        fs::create_directories(burst_path);
+
+        const std::vector<CameraInfo>& cams = session.info();
+        const int64_t  payload  = cams[0].payload;
+        const uint64_t required =
+            cfg.total_triggers() * static_cast<uint64_t>(payload) * cams.size();
+
+        std::cout << "\n[PLAN] " << cfg.duration_s << " s, " << cfg.total_triggers()
+                  << " triggers, " << payload << " B/frame, " << cams.size() << " cameras -> "
+                  << (required / 1e9) << " GB\n";
         for (const CameraInfo& c : cams)
         {
-            const std::string d = burst_path + "/" + c.dirName();
-            fs::create_directories(d);
-            cam_dirs.push_back(d);
+            std::cout << "[PLAN] cam" << c.role << " serial " << c.serial << ", " << c.width
+                      << "x" << c.height << " " << c.pixel_format << ", " << c.shutter_mode
+                      << " shutter\n";
+            std::cout << "[PLAN]      exposure " << c.exposure_us << " us (auto "
+                      << c.exposure_auto << "), gain " << c.gain_db << " dB (auto "
+                      << c.gain_auto << "), white balance " << c.white_balance_auto
+                      << ", gamma " << c.gamma_enable << "\n";
+            std::cout << "[PLAN]      trigger " << c.trigger_source << ", stream buffers "
+                      << c.stream_buffer_count << ", transport payload "
+                      << c.transport_payload << " B, chunks "
+                      << (c.chunk_frame_id ? "FrameID " : "")
+                      << (c.chunk_timestamp ? "Timestamp" : "")
+                      << ((!c.chunk_frame_id && !c.chunk_timestamp) ? "none" : "") << "\n";
         }
+
+        if (!fs::exists(cfg.output_root))
+        {
+            std::cerr << "[FATAL] Output root " << cfg.output_root << " does not exist.\n";
+            session.release();
+            system->ReleaseInstance();
+            return 1;
+        }
+
+        if (!checkFreeSpace(cfg.output_root, required, err))
+        {
+            std::cerr << "[FATAL] " << err << "\n";
+            session.release();
+            system->ReleaseInstance();
+            return 1;
+        }
+
+        if (cfg.dry_run)
+        {
+            std::cout << "[DRY RUN] Configuration applied and read back, cameras bound, space "
+                         "sufficient. Nothing written, nothing acquired.\n";
+            session.release();
+            system->ReleaseInstance();
+            return 0;
+        }
+
+        // ---- Burst directory tree ----
+
+        const std::string burst_id   = utcStamp(true);
+        const std::string burst_path = cfg.output_root + "/" + burst_id;
+
+        std::vector<std::string> cam_dirs;
+        try
+        {
+            if (fs::exists(burst_path))
+            {
+                std::cerr << "[FATAL] Burst directory " << burst_path << " already exists.\n";
+                session.release();
+                system->ReleaseInstance();
+                return 1;
+            }
+            fs::create_directories(burst_path);
+            for (const CameraInfo& c : cams)
+            {
+                const std::string d = burst_path + "/" + c.dirName();
+                fs::create_directories(d);
+                cam_dirs.push_back(d);
+            }
+        }
+        catch (const fs::filesystem_error& e)
+        {
+            std::cerr << "[FATAL] Cannot create burst tree: " << e.what() << "\n";
+            session.release();
+            system->ReleaseInstance();
+            return 1;
+        }
+
+        if (!writeManifest(burst_path + "/manifest.json", cfg, cams, burst_id, clock_ok))
+        {
+            std::cerr << "[FATAL] Manifest could not be written; aborting rather than "
+                         "producing an undocumented archive.\n";
+            session.release();
+            system->ReleaseInstance();
+            return 1;
+        }
+
+        std::cout << "[BURST] " << burst_path << "\n";
+
+        // ---- Acquisition ----
+
+        auto stats  = std::make_shared<BurstStats>();
+        auto buffer = std::make_shared<RingBuffer>(cfg.buffer_frames,
+                                                   static_cast<size_t>(payload));
+
+        const auto t_start = std::chrono::steady_clock::now();
+
+        std::thread t2(consumer_thread, buffer, stats, cam_dirs);
+        std::thread t1(producer_thread, session.cam(0), session.cam(1), buffer, stats, cfg,
+                       cams);
+
+        t1.join();
+        t2.join();
+
+        const double wall_s =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+
+        const bool completed =
+            keep_running.load() && (stats->triggers_issued.load() >= cfg.total_triggers());
+
+        writeSummary(burst_path + "/summary.json", cfg, *stats, wall_s, payload, cams.size(),
+                     completed);
+
+        std::cout << "\n[SUMMARY] " << stats->triggers_issued.load() << " triggers, "
+                  << stats->frames_pushed.load() << " pushed, "
+                  << stats->frames_written.load() << " written, "
+                  << stats->incomplete.load() << " incomplete, "
+                  << stats->retrieval_errors.load() << " retrieval errors, "
+                  << stats->pps_timeouts.load() << " PPS timeouts, "
+                  << stats->write_errors.load() << " write errors\n";
+        std::cout << "[SUMMARY] " << wall_s << " s wall clock, "
+                  << (static_cast<double>(stats->frames_written.load()) *
+                      static_cast<double>(payload) * cams.size() / wall_s / 1e6)
+                  << " MB/s mean\n";
+        std::cout << "[SUMMARY] completed=" << (completed ? "true" : "false") << ", burst at "
+                  << burst_path << "\n";
+
+        exit_code = completed ? 0 : 1;
+        session.release();
     }
-    catch (const fs::filesystem_error& e)
-    {
-        std::cerr << "[FATAL] Cannot create burst tree: " << e.what() << "\n";
-        system->ReleaseInstance();
-        return 1;
-    }
-
-    if (!writeManifest(burst_path + "/manifest.json", cfg, cams, burst_id, clock_ok))
-    {
-        std::cerr << "[FATAL] Manifest could not be written; aborting rather than producing "
-                     "an undocumented archive.\n";
-        system->ReleaseInstance();
-        return 1;
-    }
-
-    std::cout << "[BURST] " << burst_path << "\n";
-
-    // ---- Acquisition ----
-
-    auto stats  = std::make_shared<BurstStats>();
-    auto buffer = std::make_shared<RingBuffer>(cfg.buffer_frames, static_cast<size_t>(payload));
-
-    const auto t_start = std::chrono::steady_clock::now();
-
-    std::thread t2(consumer_thread, buffer, stats, cam_dirs);
-    std::thread t1(producer_thread, system, buffer, stats, cfg, cams);
-
-    t1.join();
-    t2.join();
-
-    const double wall_s =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
-
-    const bool completed =
-        keep_running.load() && (stats->triggers_issued.load() >= cfg.total_triggers());
-
-    writeSummary(burst_path + "/summary.json", cfg, *stats, wall_s, payload, cams.size(),
-                 completed);
-
-    std::cout << "\n[SUMMARY] " << stats->triggers_issued.load() << " triggers, "
-              << stats->frames_pushed.load() << " pushed, " << stats->frames_written.load()
-              << " written, " << stats->incomplete.load() << " incomplete, "
-              << stats->retrieval_errors.load() << " retrieval errors, "
-              << stats->pps_timeouts.load() << " PPS timeouts, "
-              << stats->write_errors.load() << " write errors\n";
-    std::cout << "[SUMMARY] " << wall_s << " s wall clock, "
-              << (static_cast<double>(stats->frames_written.load()) *
-                  static_cast<double>(payload) * cams.size() / wall_s / 1e6)
-              << " MB/s mean\n";
-    std::cout << "[SUMMARY] completed=" << (completed ? "true" : "false") << ", burst at "
-              << burst_path << "\n";
 
     system->ReleaseInstance();
-    return completed ? 0 : 1;
+    return exit_code;
 }

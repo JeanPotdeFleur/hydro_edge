@@ -46,6 +46,22 @@ struct Config
     std::string cam1_serial;
     bool        dry_run       = false;
 
+    // Radiometry. Locked by default: the OCM applies f-k transforms to
+    // luminance time series, and an exposure that drifts frame to frame
+    // injects its own modulation into the spectrum. 5000 us is the middle of
+    // the 4-8 ms window of Appendix E, which freezes foam motion at f/4.
+    double      exposure_us   = 5000.0;
+    double      gain_db       = 0.0;
+    bool        exposure_auto = false;   // bench escape hatch only
+
+    // Triggering. Hardware branches are written but unvalidated: they need
+    // cabling that is not yet on hand.
+    std::string trigger       = "software";   // software | line2 | line0
+
+    // Transport-layer buffer pool, per camera. Chosen rather than inherited:
+    // the factory default of 9 is not a decision.
+    int64_t     stream_buffers = 16;
+
     // Derived
     uint64_t total_triggers() const
     {
@@ -71,6 +87,16 @@ inline void printUsage(const char* argv0)
         << "                        If omitted, enumeration order is used and a warning\n"
         << "                        is emitted: USB enumeration order is not stable\n"
         << "                        across boots and the two fields of view may swap.\n"
+        << "  --exposure-us <us>    Fixed exposure time (default: 5000). Ignored under\n"
+        << "                        --exposure-auto.\n"
+        << "  --gain-db <dB>        Fixed analog gain (default: 0).\n"
+        << "  --exposure-auto       Leave ExposureAuto, GainAuto and BalanceWhiteAuto on\n"
+        << "                        Continuous. Bench convenience only: a burst acquired\n"
+        << "                        this way is radiometrically unusable for OCM, every\n"
+        << "                        frame carrying its own exposure.\n"
+        << "  --trigger <mode>      software (default), line2 or line0. The two hardware\n"
+        << "                        modes are written but UNVALIDATED: no cabling yet.\n"
+        << "  --stream-buffers <n>  Transport buffer pool per camera (default: 16, max 58).\n"
         << "  --dry-run             Validate configuration, enumerate cameras and check\n"
         << "                        free space, then exit without acquiring or writing.\n"
         << "  --help                This message.\n";
@@ -138,6 +164,50 @@ inline bool parseArgs(int argc, char** argv, Config& cfg, bool& help_requested)
             if (!needValue(i, "--cam1-serial")) return false;
             cfg.cam1_serial = argv[++i];
         }
+        else if (arg == "--exposure-us")
+        {
+            if (!needValue(i, "--exposure-us")) return false;
+            cfg.exposure_us = std::atof(argv[++i]);
+            if (cfg.exposure_us <= 0.0)
+            {
+                std::cerr << "[CONFIG] --exposure-us must be strictly positive.\n";
+                return false;
+            }
+        }
+        else if (arg == "--gain-db")
+        {
+            if (!needValue(i, "--gain-db")) return false;
+            cfg.gain_db = std::atof(argv[++i]);
+            if (cfg.gain_db < 0.0)
+            {
+                std::cerr << "[CONFIG] --gain-db must not be negative.\n";
+                return false;
+            }
+        }
+        else if (arg == "--exposure-auto")
+        {
+            cfg.exposure_auto = true;
+        }
+        else if (arg == "--trigger")
+        {
+            if (!needValue(i, "--trigger")) return false;
+            cfg.trigger = argv[++i];
+            if (cfg.trigger != "software" && cfg.trigger != "line2" && cfg.trigger != "line0")
+            {
+                std::cerr << "[CONFIG] --trigger must be software, line2 or line0.\n";
+                return false;
+            }
+        }
+        else if (arg == "--stream-buffers")
+        {
+            if (!needValue(i, "--stream-buffers")) return false;
+            cfg.stream_buffers = std::atol(argv[++i]);
+            if (cfg.stream_buffers < 3 || cfg.stream_buffers > 58)
+            {
+                std::cerr << "[CONFIG] --stream-buffers must lie between 3 and 58.\n";
+                return false;
+            }
+        }
         else if (arg == "--dry-run")
         {
             cfg.dry_run = true;
@@ -170,6 +240,14 @@ struct CameraInfo
     std::string gain_auto;
     double      exposure_us  = 0.0;
     double      gain_db      = 0.0;
+    std::string white_balance_auto;
+    std::string gamma_enable;
+    std::string trigger_source;
+    std::string user_set_loaded;
+    int64_t     transport_payload   = 0;   // PayloadSize once chunks are on
+    int64_t     stream_buffer_count = 0;
+    bool        chunk_frame_id      = false;
+    bool        chunk_timestamp     = false;
 
     // Sub-directory name inside the burst directory. Carries both the role,
     // which the analysis needs, and the serial, which fixes physical
@@ -287,7 +365,9 @@ inline bool writeManifest(const std::string&             path,
     f << "    \"duration_s\": " << cfg.duration_s << ",\n";
     f << "    \"target_triggers\": " << cfg.total_triggers() << ",\n";
     f << "    \"ring_buffer_frames\": " << cfg.buffer_frames << ",\n";
-    f << "    " << jstr("trigger_source", "software") << ",\n";
+    f << "    " << jstr("trigger_source", cfg.trigger) << ",\n";
+    f << "    \"stream_buffers_per_camera\": " << cfg.stream_buffers << ",\n";
+    f << "    \"exposure_locked\": " << (cfg.exposure_auto ? "false" : "true") << ",\n";
     f << "    " << jstr("cadence_anchor", "gnss_pps_1hz_plus_500ms_interpolation") << "\n";
     f << "  },\n";
 
@@ -318,6 +398,14 @@ inline bool writeManifest(const std::string&             path,
         f << "      " << jstr("gain_auto", c.gain_auto) << ",\n";
         f << "      \"exposure_us\": " << c.exposure_us << ",\n";
         f << "      \"gain_db\": " << c.gain_db << ",\n";
+        f << "      " << jstr("white_balance_auto", c.white_balance_auto) << ",\n";
+        f << "      " << jstr("gamma_enable", c.gamma_enable) << ",\n";
+        f << "      " << jstr("trigger_source", c.trigger_source) << ",\n";
+        f << "      " << jstr("user_set_loaded", c.user_set_loaded) << ",\n";
+        f << "      \"transport_payload_bytes\": " << c.transport_payload << ",\n";
+        f << "      \"stream_buffer_count\": " << c.stream_buffer_count << ",\n";
+        f << "      \"chunk_frame_id\": " << (c.chunk_frame_id ? "true" : "false") << ",\n";
+        f << "      \"chunk_timestamp\": " << (c.chunk_timestamp ? "true" : "false") << ",\n";
         // Reserved for the real-time ROI crop of section 1.6. Full-frame
         // values today; once cropping is active a reader that ignores these
         // fields would misinterpret the geometry of every archived frame.
