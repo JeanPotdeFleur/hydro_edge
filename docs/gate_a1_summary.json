@@ -1,0 +1,45 @@
+{
+  "schema_version": "1",
+  "ended_utc": "2026-08-25T19:52:03Z",
+  "completed": true,
+  "wall_clock_s": 5400.83,
+  "counters": {
+    "target_triggers": 10800,
+    "triggers_issued": 10800,
+    "frames_pushed": 10800,
+    "frames_written": 10800,
+    "incomplete": 0,
+    "retrieval_errors": 0,
+    "pps_timeouts": 0,
+    "write_errors": 0,
+    "transport_frame_id_gaps": 0,
+    "buffer_overflows": 0,
+    "late_frames_skipped": 0
+  },
+  "transport_counters": [
+    { "camera": 0, "started": 10800, "delivered": 10800, "lost": 0, "incomplete": 0, "dropped": 0 },
+    { "camera": 1, "started": 10800, "delivered": 10800, "lost": 0, "incomplete": 0, "dropped": 0 }
+  ],
+  "ring_buffer": {
+    "capacity_frames": 60,
+    "high_water_frames": 1
+  },
+  "cadence": {
+    "intervals": 10799,
+    "mean_ms": 500,
+    "sd_ms": 0.178896,
+    "min_ms": 496.967,
+    "max_ms": 503.033,
+    "mean_a_to_b_ms": 500.046,
+    "mean_b_to_a_ms": 499.954
+  },
+  "device_skew": {
+    "samples": 10800,
+    "mean_ms": 7.27592,
+    "sd_ms": 1.11963
+  },
+  "mean_write_MBps": 64.5111,
+  "missing_index_count": 0,
+  "missing_indices": [],
+  "missing_indices_truncated": false
+}

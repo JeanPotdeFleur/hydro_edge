@@ -1,0 +1,117 @@
+nohup: ignoring input
+
+[PLAN] 5400 s, 10800 triggers, 16130240 B/frame, 2 cameras -> 348.413 GB
+[PLAN] cam0 serial 24260192, 5320x3032 BayerRG8, Global shutter
+[PLAN]      exposure 5001 us (auto Off), gain 0 dB (auto Off), white balance Off, gamma 0
+[PLAN]      trigger Software, stream buffers 16, transport payload 16130292 B, chunks FrameID Timestamp
+[PLAN] cam1 serial 24260193, 5320x3032 BayerRG8, Global shutter
+[PLAN]      exposure 5001 us (auto Off), gain 0 dB (auto Off), white balance Off, gamma 0
+[PLAN]      trigger Software, stream buffers 16, transport payload 16130292 B, chunks FrameID Timestamp
+[SPACE] Required 348.413 GB, margin 17.4207 GB, available 7937.29 GB on /mnt/vault
+[BURST] /mnt/vault/2026-08-25T18-22-01Z
+[THREAD 1] Producer running on core 2. Target: [THREAD 2] Consumer running on core 3.
+10800 triggers at 2 Hz, trigger source software.
+[THREAD 1] Acquisition loop armed.
+[THREAD 1] First frame: image size 16130240 and 16130240 bytes, expected 16130240.
+[THREAD 1] Chunk data: cam0 frame id 1, cam1 frame id 1, device skew 5.04494 ms.
+[BEAT] index 121/10800, written 120, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 243/10800, written 242, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 365/10800, written 364, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 487/10800, written 486, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 609/10800, written 608, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 731/10800, written 730, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 853/10800, written 852, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 975/10800, written 974, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1097/10800, written 1096, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1219/10800, written 1218, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1341/10800, written 1340, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1463/10800, written 1462, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1585/10800, written 1584, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1707/10800, written 1706, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1829/10800, written 1828, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 1951/10800, written 1950, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2071/10800, written 2070, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2193/10800, written 2192, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2315/10800, written 2314, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2435/10800, written 2434, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2557/10800, written 2556, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2679/10800, written 2678, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2799/10800, written 2798, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 2919/10800, written 2918, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3041/10800, written 3040, buffer 1/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3163/10800, written 3162, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3283/10800, written 3282, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3405/10800, written 3404, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3525/10800, written 3524, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3647/10800, written 3646, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3767/10800, written 3766, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 3887/10800, written 3886, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4009/10800, written 4008, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4129/10800, written 4128, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4251/10800, written 4250, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4371/10800, written 4370, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4491/10800, written 4490, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4613/10800, written 4612, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4735/10800, written 4734, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4855/10800, written 4854, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 4977/10800, written 4976, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5099/10800, written 5098, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5221/10800, written 5220, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5343/10800, written 5342, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5463/10800, written 5462, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5583/10800, written 5582, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5705/10800, written 5704, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5825/10800, written 5824, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 5947/10800, written 5946, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6067/10800, written 6066, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6187/10800, written 6186, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6309/10800, written 6308, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6429/10800, written 6428, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6549/10800, written 6548, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6671/10800, written 6670, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6791/10800, written 6790, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 6913/10800, written 6912, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7035/10800, written 7034, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7157/10800, written 7156, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7277/10800, written 7276, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7399/10800, written 7398, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7519/10800, written 7518, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7641/10800, written 7640, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7763/10800, written 7762, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 7883/10800, written 7882, buffer 1/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8005/10800, written 8004, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8127/10800, written 8126, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8249/10800, written 8248, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8369/10800, written 8368, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8491/10800, written 8490, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8613/10800, written 8612, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8735/10800, written 8734, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8857/10800, written 8856, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 8977/10800, written 8976, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9099/10800, written 9098, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9221/10800, written 9220, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9343/10800, written 9342, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9465/10800, written 9464, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9585/10800, written 9584, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9705/10800, written 9704, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9827/10800, written 9826, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 9947/10800, written 9946, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10069/10800, written 10068, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10191/10800, written 10190, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10313/10800, written 10312, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10433/10800, written 10432, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10553/10800, written 10552, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10673/10800, written 10672, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[BEAT] index 10795/10800, written 10794, buffer 0/60 (peak 1), incomplete 0, transport gaps 0
+[THREAD 2] Ring buffer fully drained, consumer stopped.
+
+[SUMMARY] 10800 triggers, 10800 pushed, 10800 written, 0 incomplete, 0 retrieval errors, 0 PPS timeouts, 0 write errors
+[SUMMARY] 5400.83 s wall clock, 64.5111 MB/s mean
+[SUMMARY] buffer overflows 0, late frames skipped 0
+[SUMMARY] transport frame id gaps 0, ring buffer peak 1/60 frames
+[SUMMARY] cam0 transport: started 10800, delivered 10800, lost 0, incomplete 0, dropped 0
+[SUMMARY] cam1 transport: started 10800, delivered 10800, lost 0, incomplete 0, dropped 0
+[CADENCE] 10799 intervals, mean 500 ms, sd 0.178896 ms, range [496.967, 503.033]
+[CADENCE] A to B 500.046 ms, B to A 499.954 ms (both should be 500)
+[CADENCE] device skew mean 7.27592 ms, sd 1.11963 ms over 10800 frames
+[SUMMARY] completed=true, burst at /mnt/vault/2026-08-25T18-22-01Z
