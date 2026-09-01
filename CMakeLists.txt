@@ -62,3 +62,10 @@ target_link_libraries(hydro_edge
 add_executable(cam_probe tools/cam_probe.cpp)
 target_include_directories(cam_probe PRIVATE ${SPINNAKER_INCLUDE_DIR})
 target_link_libraries(cam_probe ${SPINNAKER_LIBRARY})
+# Field focus and exposure aid. Third target, kept out of the acquisition
+# binary: it runs on one camera at a time, free-running, and the acquisition
+# binary refuses to start with fewer than two. Links OpenCV, which the
+# acquisition path does not yet exercise.
+add_executable(cam_focus tools/cam_focus.cpp)
+target_include_directories(cam_focus PRIVATE ${SPINNAKER_INCLUDE_DIR})
+target_link_libraries(cam_focus ${OpenCV_LIBS} ${SPINNAKER_LIBRARY})
