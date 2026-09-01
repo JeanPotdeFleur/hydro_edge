@@ -33,6 +33,16 @@
 // the burst volumes of Appendix H all assume it.
 constexpr double kSamplingRateHz = 2.0;
 
+// Process exit codes. The distinction between a burst refused before it began
+// and one that ran without completing is what makes a service unit safe to
+// configure: the first must never be retried on a schedule that will refuse it
+// again, and the second must never be retried at all, having already written
+// its data.
+constexpr int kExitOk         = 0;   // ran to term, no loss of any kind
+constexpr int kExitIncomplete = 1;   // acquired, but shed frames or was stopped
+constexpr int kExitUsage      = 2;   // malformed command line
+constexpr int kExitRefused    = 3;   // refused before the first trigger
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -67,6 +77,25 @@ struct Config
     // keep up, and continuing only produces an archive full of holes while
     // consuming the battery.
     int64_t     max_consecutive_overflows = 20;
+
+    // PPS character device. Empty means resolve it at start-up by inspecting
+    // the exported names under /sys/class/pps and confirming which source
+    // actually pulses; filled on the command line, the operator's choice is
+    // honoured. Whichever way it is obtained, the resolved path is what
+    // reaches the manifest.
+    std::string pps_device;
+
+    // Consecutive PPS fetch timeouts tolerated before the burst is abandoned.
+    // A timeout does not advance the trigger index, so without this ceiling a
+    // silent receiver does not fail the burst, it makes it run forever. Thirty
+    // fetches at a two-second timeout is a minute of silence.
+    int64_t     max_pps_timeouts = 30;
+
+    // Refuse to start unless the kernel reports the clock disciplined. The Pi
+    // restores a stale date at boot and keeps it until the network answers, so
+    // an unguarded burst can be filed weeks in the past. A missed slot is
+    // recoverable; a misdated archive is not.
+    bool        require_clock_sync = false;
 
     // Derived
     uint64_t total_triggers() const
@@ -105,6 +134,20 @@ inline void printUsage(const char* argv0)
         << "  --stream-buffers <n>  Transport buffer pool per camera (default: 16, max 58).\n"
         << "  --max-overflows <n>   Consecutive ring buffer overflows tolerated before the\n"
         << "                        burst is abandoned (default: 20).\n"
+        << "  --pps-device <path>   PPS character device, e.g. /dev/pps0. Omitted, the\n"
+        << "                        device is resolved at start-up: every source under\n"
+        << "                        /sys/class/pps is probed and the one whose pulse\n"
+        << "                        counter advances is selected. Enumeration order is not\n"
+        << "                        contractual, so a literal path is a hazard.\n"
+        << "  --max-pps-timeouts <n>  Consecutive PPS fetch timeouts tolerated before the\n"
+        << "                        burst is abandoned (default: 30, that is 60 s of\n"
+        << "                        silence). A timeout does not advance the trigger\n"
+        << "                        index, so without a ceiling a silent receiver makes\n"
+        << "                        the burst run forever instead of failing.\n"
+        << "  --require-clock-sync  Refuse to start unless the kernel reports the system\n"
+        << "                        clock disciplined. Intended for scheduled operation:\n"
+        << "                        the Pi boots on a stale date until the network\n"
+        << "                        answers, and a burst named from it is unusable.\n"
         << "  --dry-run             Validate configuration, enumerate cameras and check\n"
         << "                        free space, then exit without acquiring or writing.\n"
         << "  --help                This message.\n";
@@ -225,6 +268,25 @@ inline bool parseArgs(int argc, char** argv, Config& cfg, bool& help_requested)
                 std::cerr << "[CONFIG] --max-overflows must be at least 1.\n";
                 return false;
             }
+        }
+        else if (arg == "--pps-device")
+        {
+            if (!needValue(i, "--pps-device")) return false;
+            cfg.pps_device = argv[++i];
+        }
+        else if (arg == "--max-pps-timeouts")
+        {
+            if (!needValue(i, "--max-pps-timeouts")) return false;
+            cfg.max_pps_timeouts = std::atol(argv[++i]);
+            if (cfg.max_pps_timeouts < 1)
+            {
+                std::cerr << "[CONFIG] --max-pps-timeouts must be at least 1.\n";
+                return false;
+            }
+        }
+        else if (arg == "--require-clock-sync")
+        {
+            cfg.require_clock_sync = true;
         }
         else if (arg == "--dry-run")
         {
@@ -438,7 +500,9 @@ inline bool writeManifest(const std::string&             path,
     f << "    " << jstr("trigger_source", cfg.trigger) << ",\n";
     f << "    \"stream_buffers_per_camera\": " << cfg.stream_buffers << ",\n";
     f << "    \"exposure_locked\": " << (cfg.exposure_auto ? "false" : "true") << ",\n";
-    f << "    " << jstr("cadence_anchor", "gnss_pps_1hz_plus_500ms_interpolation") << "\n";
+    f << "    " << jstr("cadence_anchor", "gnss_pps_1hz_plus_500ms_interpolation") << ",\n";
+    f << "    " << jstr("pps_device", cfg.pps_device) << ",\n";
+    f << "    \"clock_sync_required\": " << (cfg.require_clock_sync ? "true" : "false") << "\n";
     f << "  },\n";
 
     f << "  \"frame_indexing\": {\n";

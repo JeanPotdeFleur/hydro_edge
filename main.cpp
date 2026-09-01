@@ -28,6 +28,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -557,6 +558,216 @@ static bool clockIsSynchronized()
 }
 
 // ---------------------------------------------------------------------------
+// PPS device resolution
+// ---------------------------------------------------------------------------
+// Every PPS source is exposed through the same class, and the enumeration
+// order is not contractual. On this station /sys/class/pps/pps0 is the GNSS
+// timepulse and pps1 the RP1 Ethernet PTP clock, which never asserts, but
+// nothing guarantees that ordering survives a reboot. A binary opening
+// /dev/pps0 by literal path is therefore one boot away from waiting on a
+// device that will never pulse, and the consequence is worse than a failure:
+// a fetch timeout does not advance the trigger index, so the burst would not
+// abort, it would simply never end.
+//
+// Resolution takes two steps. The exported name orders the candidates, then
+// the hardware confirms that ordering: the assert attribute carries a
+// monotonic pulse counter, and a source that does not advance it does not
+// pulse, whatever it is called. The second step also catches what the first
+// cannot, a correctly named receiver holding no fix and emitting nothing, and
+// it catches it before the burst directory exists rather than an hour later.
+
+enum class PpsProbe
+{
+    Pulsing,
+    Silent,
+    Unreadable
+};
+
+struct PpsCandidate
+{
+    std::string        node;          // "pps0"
+    std::string        name;          // contents of the name attribute
+    bool               counter_read = false;
+    unsigned long long first        = 0;
+    unsigned long long second       = 0;
+    PpsProbe           verdict      = PpsProbe::Unreadable;
+};
+
+static std::string ppsAttribute(const std::string& node, const char* attr)
+{
+    std::ifstream f("/sys/class/pps/" + node + "/" + attr);
+    std::string   line;
+    if (f && std::getline(f, line)) return line;
+    return std::string();
+}
+
+// The assert attribute reads "<seconds>.<nanoseconds>#<counter>". Only the
+// counter is of interest here: it is monotonic and increments once per pulse,
+// which makes liveness a comparison rather than an inference.
+static bool ppsPulseCounter(const std::string& node, unsigned long long& out)
+{
+    const std::string line = ppsAttribute(node, "assert");
+    const size_t      hash = line.find('#');
+    if (hash == std::string::npos || hash + 1 >= line.size()) return false;
+
+    const char* start = line.c_str() + hash + 1;
+    char*       end   = nullptr;
+    errno             = 0;
+    const unsigned long long v = std::strtoull(start, &end, 10);
+    if (errno != 0 || end == start) return false;
+
+    out = v;
+    return true;
+}
+
+// device is in and out. Non-empty on entry it is an operator override, which
+// is honoured: it is still probed, but silence downgrades to a warning. The
+// guard against an endless burst is the consecutive-timeout ceiling, not this
+// probe, and an operator who names a device has a reason.
+static bool resolvePpsDevice(std::string& device, std::string& err)
+{
+    const bool explicit_choice = !device.empty();
+
+    std::vector<PpsCandidate> cands;
+    try
+    {
+        for (const auto& entry : fs::directory_iterator("/sys/class/pps"))
+        {
+            const std::string node = entry.path().filename().string();
+            if (node.rfind("pps", 0) != 0) continue;
+            PpsCandidate c;
+            c.node = node;
+            c.name = ppsAttribute(node, "name");
+            cands.push_back(c);
+        }
+    }
+    catch (const fs::filesystem_error& e)
+    {
+        err = std::string("cannot enumerate /sys/class/pps: ") + e.what();
+        return false;
+    }
+
+    if (cands.empty())
+    {
+        err = "no PPS source is registered under /sys/class/pps. Check that "
+              "dtoverlay=pps-gpio is present in /boot/firmware/config.txt.";
+        return false;
+    }
+
+    std::sort(cands.begin(), cands.end(),
+              [](const PpsCandidate& a, const PpsCandidate& b) { return a.node < b.node; });
+
+    // One 1.5 s window, every candidate sampled either side of it. A single
+    // sleep keeps start-up cost independent of how many sources are present.
+    for (PpsCandidate& c : cands) c.counter_read = ppsPulseCounter(c.node, c.first);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    for (PpsCandidate& c : cands)
+    {
+        unsigned long long later = 0;
+        if (c.counter_read && ppsPulseCounter(c.node, later))
+        {
+            c.second  = later;
+            c.verdict = (later != c.first) ? PpsProbe::Pulsing : PpsProbe::Silent;
+        }
+        else
+        {
+            c.verdict = PpsProbe::Unreadable;
+        }
+    }
+
+    for (const PpsCandidate& c : cands)
+    {
+        std::cout << "[PPS] /dev/" << c.node << " name="
+                  << (c.name.empty() ? "<none>" : c.name) << " ";
+        switch (c.verdict)
+        {
+            case PpsProbe::Pulsing:
+                std::cout << "pulsing (" << c.first << " -> " << c.second << ")\n";
+                break;
+            case PpsProbe::Silent:
+                std::cout << "silent (counter held at " << c.first << ")\n";
+                break;
+            case PpsProbe::Unreadable:
+                std::cout << "pulse counter unreadable\n";
+                break;
+        }
+    }
+
+    if (explicit_choice)
+    {
+        const std::string node = fs::path(device).filename().string();
+        auto              it   = std::find_if(cands.begin(), cands.end(),
+                                              [&](const PpsCandidate& c) { return c.node == node; });
+        if (it == cands.end())
+        {
+            std::cerr << "[PPS] WARNING: " << device << " is not registered under "
+                         "/sys/class/pps. Opening it as instructed.\n";
+        }
+        else if (it->verdict == PpsProbe::Silent)
+        {
+            std::cerr << "[PPS] WARNING: " << device << " (" << it->name
+                      << ") did not pulse during the probe window. Proceeding as "
+                         "instructed; the burst will abandon on the timeout ceiling if "
+                         "it stays silent.\n";
+        }
+        std::cout << "[PPS] Using " << device << " as given on the command line.\n";
+        return true;
+    }
+
+    std::vector<const PpsCandidate*> pulsing, unreadable;
+    for (const PpsCandidate& c : cands)
+    {
+        if (c.verdict == PpsProbe::Pulsing)         pulsing.push_back(&c);
+        else if (c.verdict == PpsProbe::Unreadable) unreadable.push_back(&c);
+    }
+
+    // A PTP clock exposed through this class is never the intended source, so
+    // it loses a tie. It should not be pulsing at all, but preferring against
+    // it costs nothing and removes a way to be wrong silently.
+    auto preferNonPtp = [](const std::vector<const PpsCandidate*>& v) {
+        for (const PpsCandidate* c : v)
+            if (c->name.find("ptp") == std::string::npos) return c;
+        return v.front();
+    };
+
+    if (pulsing.size() == 1)
+    {
+        device = "/dev/" + pulsing.front()->node;
+        std::cout << "[PPS] Selected " << device << " (" << pulsing.front()->name
+                  << "), the only source observed pulsing.\n";
+        return true;
+    }
+
+    if (pulsing.size() > 1)
+    {
+        const PpsCandidate* pick = preferNonPtp(pulsing);
+        device = "/dev/" + pick->node;
+        std::cerr << "[PPS] WARNING: " << pulsing.size() << " sources are pulsing; selected "
+                  << device << " (" << pick->name
+                  << "). Name --pps-device to remove the ambiguity.\n";
+        return true;
+    }
+
+    // Nothing pulsed. If a counter could not be read the probe is
+    // inconclusive rather than negative, and a missing permission must not
+    // stop a burst: fall back on the exported name and say so.
+    if (!unreadable.empty())
+    {
+        const PpsCandidate* pick = preferNonPtp(unreadable);
+        device = "/dev/" + pick->node;
+        std::cerr << "[PPS] WARNING: no pulse counter could be read, so liveness is "
+                     "undetermined. Falling back on the exported name and selecting "
+                  << device << " (" << pick->name << ").\n";
+        return true;
+    }
+
+    err = "no PPS source is pulsing: every registered source held its counter over a "
+          "1.5 s window. Check that the GNSS antenna has sky view and that the receiver "
+          "holds a fix.";
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Free space
 // ---------------------------------------------------------------------------
 
@@ -700,10 +911,11 @@ void producer_thread(CameraPtr                      cam0,
     // timing campaign is meant to detect, and it would be self-inflicted.
     stats->timing.reserve(total_triggers + 4);
 
-    int pps_fd = open("/dev/pps0", O_RDWR);
+    int pps_fd = open(cfg.pps_device.c_str(), O_RDWR);
     if (pps_fd < 0)
     {
-        std::cerr << "[CRITICAL] Cannot open /dev/pps0.\n";
+        std::cerr << "[CRITICAL] Cannot open " << cfg.pps_device << ": "
+                  << std::strerror(errno) << "\n";
         buffer->shutdown();
         return;
     }
@@ -711,7 +923,8 @@ void producer_thread(CameraPtr                      cam0,
     pps_handle_t pps_handle;
     if (time_pps_create(pps_fd, &pps_handle) < 0)
     {
-        std::cerr << "[CRITICAL] time_pps_create failed.\n";
+        std::cerr << "[CRITICAL] time_pps_create failed on " << cfg.pps_device << ": "
+                  << std::strerror(errno) << "\n";
         close(pps_fd);
         buffer->shutdown();
         return;
@@ -734,9 +947,10 @@ void producer_thread(CameraPtr                      cam0,
         // do not reset at BeginAcquisition and the two sensors were observed
         // starting two frames apart, so only the increment within one camera
         // carries meaning; comparing absolute values across sensors does not.
-        int64_t  last_fid[2]          = {-1, -1};
-        uint64_t gap_reports          = 0;
+        int64_t  last_fid[2]           = {-1, -1};
+        uint64_t gap_reports           = 0;
         int64_t  consecutive_overflows = 0;
+        int64_t  consecutive_timeouts  = 0;
         auto     last_beat     = std::chrono::steady_clock::now();
         const auto beat_period = std::chrono::seconds(60);
 
@@ -902,9 +1116,26 @@ void producer_thread(CameraPtr                      cam0,
             if (time_pps_fetch(pps_handle, PPS_TSFMT_TSPEC, &info, &timeout) < 0)
             {
                 stats->pps_timeouts.fetch_add(1);
-                if (keep_running) std::cerr << "[WARN] PPS timeout.\n";
+                ++consecutive_timeouts;
+                if (keep_running)
+                {
+                    std::cerr << "[WARN] PPS timeout on " << cfg.pps_device << " ("
+                              << consecutive_timeouts << " consecutive)\n";
+                }
+                // A timeout does not advance next_index, so without this
+                // ceiling a silent receiver does not fail the burst: it makes
+                // it run forever, holding the slot and queueing the next.
+                if (consecutive_timeouts >= cfg.max_pps_timeouts)
+                {
+                    std::cerr << "[CRITICAL] " << consecutive_timeouts
+                              << " consecutive PPS timeouts on " << cfg.pps_device
+                              << ": no time reference. Abandoning the burst rather than "
+                                 "waiting indefinitely.\n";
+                    keep_running = false;
+                }
                 continue;
             }
+            consecutive_timeouts = 0;
 
             const uint64_t t_base_ns =
                 (static_cast<uint64_t>(info.assert_timestamp.tv_sec) * 1000000000ULL) +
@@ -1015,12 +1246,12 @@ int main(int argc, char** argv)
 
     if (!parseArgs(argc, argv, cfg, help_requested))
     {
-        return 2;
+        return kExitUsage;
     }
     if (help_requested)
     {
         printUsage(argv[0]);
-        return 0;
+        return kExitOk;
     }
 
     std::signal(SIGINT, signal_handler);
@@ -1029,12 +1260,31 @@ int main(int argc, char** argv)
     const bool clock_ok = clockIsSynchronized();
     if (!clock_ok)
     {
+        if (cfg.require_clock_sync)
+        {
+            std::cerr << "[FATAL] The system clock is not disciplined and "
+                         "--require-clock-sync was given. Refusing to start: an archive "
+                         "named from a stale date is worse than a missed slot.\n";
+            return kExitRefused;
+        }
         std::cerr << "[WARN] System clock is not synchronised. The burst directory will be "
                      "named from a possibly stale date; this is recorded in the manifest.\n";
     }
 
+    // Before the SDK is touched, so that a station with no time reference
+    // fails in seconds and leaves nothing behind. This also makes --dry-run
+    // an answer to the question of whether the receiver is alive.
+    {
+        std::string pps_err;
+        if (!resolvePpsDevice(cfg.pps_device, pps_err))
+        {
+            std::cerr << "[FATAL] " << pps_err << "\n";
+            return kExitRefused;
+        }
+    }
+
     SystemPtr system = System::GetInstance();
-    int       exit_code = 1;
+    int       exit_code = kExitIncomplete;
 
     {
         // Scoped so that the session releases both cameras before
@@ -1047,7 +1297,7 @@ int main(int argc, char** argv)
             std::cerr << "[FATAL] " << err << "\n";
             session.release();
             system->ReleaseInstance();
-            return 1;
+            return kExitRefused;
         }
 
         const std::vector<CameraInfo>& cams = session.info();
@@ -1080,7 +1330,7 @@ int main(int argc, char** argv)
             std::cerr << "[FATAL] Output root " << cfg.output_root << " does not exist.\n";
             session.release();
             system->ReleaseInstance();
-            return 1;
+            return kExitRefused;
         }
 
         if (!checkFreeSpace(cfg.output_root, required, err))
@@ -1088,7 +1338,7 @@ int main(int argc, char** argv)
             std::cerr << "[FATAL] " << err << "\n";
             session.release();
             system->ReleaseInstance();
-            return 1;
+            return kExitRefused;
         }
 
         if (cfg.dry_run)
@@ -1097,7 +1347,7 @@ int main(int argc, char** argv)
                          "sufficient. Nothing written, nothing acquired.\n";
             session.release();
             system->ReleaseInstance();
-            return 0;
+            return kExitOk;
         }
 
         // ---- Burst directory tree ----
@@ -1113,7 +1363,7 @@ int main(int argc, char** argv)
                 std::cerr << "[FATAL] Burst directory " << burst_path << " already exists.\n";
                 session.release();
                 system->ReleaseInstance();
-                return 1;
+                return kExitRefused;
             }
             fs::create_directories(burst_path);
             for (const CameraInfo& c : cams)
@@ -1128,7 +1378,7 @@ int main(int argc, char** argv)
             std::cerr << "[FATAL] Cannot create burst tree: " << e.what() << "\n";
             session.release();
             system->ReleaseInstance();
-            return 1;
+            return kExitRefused;
         }
 
         if (!writeManifest(burst_path + "/manifest.json", cfg, cams, burst_id, clock_ok))
@@ -1137,7 +1387,7 @@ int main(int argc, char** argv)
                          "producing an undocumented archive.\n";
             session.release();
             system->ReleaseInstance();
-            return 1;
+            return kExitRefused;
         }
 
         std::cout << "[BURST] " << burst_path << "\n";
@@ -1221,7 +1471,7 @@ int main(int argc, char** argv)
         std::cout << "[SUMMARY] completed=" << (completed ? "true" : "false") << ", burst at "
                   << burst_path << "\n";
 
-        exit_code = completed ? 0 : 1;
+        exit_code = completed ? kExitOk : kExitIncomplete;
         session.release();
     }
 
