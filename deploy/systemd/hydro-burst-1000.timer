@@ -1,0 +1,16 @@
+[Unit]
+Description=Hydro burst at 10:00 Pacific, Strategy 3
+
+[Timer]
+# The system clock is UTC, so the calendar is qualified explicitly. Without
+# the zone, 10:00 would fire at 03:00 local.
+OnCalendar=*-*-* 10:00:00 America/Los_Angeles
+# A missed slot stays missed: waking on boot to start a forty-minute burst at
+# an arbitrary hour, possibly before the clock has disciplined, is worth less
+# than the slot it recovers.
+Persistent=false
+AccuracySec=1s
+Unit=hydro-burst@2400.service
+
+[Install]
+WantedBy=timers.target

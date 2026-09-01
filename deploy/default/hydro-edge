@@ -1,0 +1,17 @@
+# /etc/default/hydro-edge
+#
+# Environment for hydro-burst@.service. Kept out of the unit so that a serial
+# number or an exposure can be changed without editing a unit and reloading the
+# daemon, and so that one file holds every value the schedule depends on.
+#
+# Exposure is the figure read off cam_focus at the deployment site and locked,
+# not a guess: at f/4 in full sun the working value is a few hundred
+# microseconds, white foam clipping well before the 5000 the binary defaults
+# to. Under fog it is several milliseconds. It is expected to change between
+# deployments and must be revisited whenever the optics or the site do.
+
+HYDRO_OUTPUT=/mnt/vault
+HYDRO_CAM0=24260192
+HYDRO_CAM1=24260193
+HYDRO_EXPOSURE_US=5000
+HYDRO_GAIN_DB=0

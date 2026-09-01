@@ -1,0 +1,56 @@
+[Unit]
+Description=Hydro edge acquisition burst, %i seconds
+Documentation=https://github.com/JeanPotdeFleur/hydro_edge
+
+# The vault must be mounted. Without this the burst can start with /mnt/vault
+# unmounted, in which case statvfs reports the free space of the boot microSD:
+# a long burst is refused by accident, a short one fills the card.
+RequiresMountsFor=/mnt/vault
+
+# Ordering only. The clock gate itself is inside the binary
+# (--require-clock-sync), which fails fast and frees the slot; a unit that
+# merely waits on time-sync.target would hold the slot indefinitely on a
+# station whose clock never disciplines.
+Wants=time-sync.target
+After=time-sync.target network-online.target
+
+[Service]
+Type=exec
+User=bakerlab
+Group=bakerlab
+
+EnvironmentFile=/etc/default/hydro-edge
+EnvironmentFile=-/etc/default/hydro-edge-%i
+
+ExecStart=/home/bakerlab/hydro_edge/build/hydro_edge \
+    --output ${HYDRO_OUTPUT} \
+    --duration %i \
+    --cam0-serial ${HYDRO_CAM0} \
+    --cam1-serial ${HYDRO_CAM1} \
+    --exposure-us ${HYDRO_EXPOSURE_US} \
+    --gain-db ${HYDRO_GAIN_DB} \
+    --require-clock-sync
+
+# Deliberately no restart. The binary exits 1 whenever a burst ran without
+# completing, which includes shedding a single frame, so Restart=on-failure
+# would relaunch a forty-minute burst that has already written 155 GB and
+# would keep doing it. A missed burst costs one slot out of twenty-one; a
+# restart loop costs the disk. The next timer occurrence is the retry.
+Restart=no
+
+# Ceiling against a burst that hangs and overruns into the following slot.
+# Sized for Strategy 3 at 2400 s with ten minutes of margin; a Strategy 2
+# burst at 5400 s exceeds it and is run by hand, not by timer.
+RuntimeMaxSec=3000
+
+# SIGTERM on stop, and enough time to drain: sixty ring buffer slots hold
+# 1.9 GB, about twelve seconds at the measured write rate.
+KillSignal=SIGTERM
+TimeoutStopSec=180
+
+SyslogIdentifier=hydro-burst
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

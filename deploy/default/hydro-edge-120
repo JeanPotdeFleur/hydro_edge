@@ -1,0 +1,9 @@
+# /etc/default/hydro-edge-120
+#
+# Per-instance override, read after the main file by hydro-burst@.service.
+# The 120 s instance is the scheduler soak: it exercises the same unit as
+# production, thirty-six times over a night instead of three, and writes
+# somewhere that can be deleted wholesale afterwards without touching real
+# acquisitions.
+
+HYDRO_OUTPUT=/mnt/vault/soak

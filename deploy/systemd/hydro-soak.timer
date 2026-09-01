@@ -1,0 +1,14 @@
+[Unit]
+Description=Scheduler soak, a short burst every twenty minutes
+
+[Timer]
+# Thirty-six cycles over a night against three in production. Each exercises
+# the whole sequence, arming through release, which is where a leaked handle
+# or an exception at shutdown would show; three occurrences would not find it.
+OnCalendar=*:0/20
+Persistent=false
+AccuracySec=1s
+Unit=hydro-burst@120.service
+
+[Install]
+WantedBy=timers.target
