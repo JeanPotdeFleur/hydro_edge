@@ -267,21 +267,30 @@ static void configureCamera(CameraPtr pCam, const Config& cfg, CameraInfo& info)
     {
         setEnum(m, "TriggerSource", "Software");
     }
-    else
+        else
     {
-        // UNVALIDATED. Neither branch has been exercised: the GPIO cabling is
-        // not yet on hand. Line2 is the non-isolated 3.3 V TTL GPIO, which
-        // matches the Raspberry Pi header directly and is the intended first
-        // attempt. Line0 is the opto-isolated input, immune to the ground
+        // Line2 is pin 3 of the Hirose HR10, the red wire, and it is a dual
+        // function pin: the same conductor can be driven by the camera as a
+        // +3.3 V rail capable of 120 mA nominal, under the V3_3Enable node.
+        // Left enabled while a Raspberry Pi GPIO pulls the net low, that is a
+        // 120 mA source shorted against an RP1 pin rated for nothing of the
+        // sort. It is forced off before the line is ever configured as an
+        // input, and the state reached is read back into the manifest rather
+        // than assumed.
+        //
+        // Line0 is the opto-isolated input on pin 2, immune to the ground
         // loops expected between a Pi and two cameras five metres away on a
         // coastal roof, but specified for 5 V and therefore marginal when
         // driven at 3.3 V; it is the reason the 470 ohm resistors sit in the
-        // bill of materials.
+        // bill of materials. The non-isolated return is pin 6, brown, the
+        // camera power ground; pin 5 is the opto ground and is deliberately
+        // not connected to it.
         const char* line = (cfg.trigger == "line2") ? "Line2" : "Line0";
         setEnum(m, "LineSelector", line);
+        trySetBool(m, "V3_3Enable", false);
         trySetEnum(m, "LineMode", "Input");
         setEnum(m, "TriggerSource", line);
-        trySetEnum(m, "TriggerActivation", "RisingEdge");
+        trySetEnum(m, "TriggerActivation", "FallingEdge");
     }
 
     // Payload is read before chunk data is enabled, so that it measures the
@@ -345,6 +354,14 @@ static void configureCamera(CameraPtr pCam, const Config& cfg, CameraInfo& info)
     info.white_balance_auto = nodeStr(m, "BalanceWhiteAuto");
     info.gamma_enable       = nodeStr(m, "GammaEnable");
     info.trigger_source     = nodeStr(m, "TriggerSource");
+        if (cfg.trigger != "software")
+    {
+        std::cout << "[LINE] " << info.serial << " " << nodeStr(m, "LineSelector")
+                  << ": mode " << nodeStr(m, "LineMode")
+                  << ", 3V3 " << nodeStr(m, "V3_3Enable")
+                  << ", status " << nodeStr(m, "LineStatus")
+                  << ", activation " << nodeStr(m, "TriggerActivation") << "\n";
+    }
     info.width              = nodeInt(m, "Width", 0);
     info.height             = nodeInt(m, "Height", 0);
     info.exposure_us        = nodeFloat(m, "ExposureTime", info.exposure_us);
