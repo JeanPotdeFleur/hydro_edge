@@ -91,6 +91,21 @@ struct Config
     // fetches at a two-second timeout is a minute of silence.
     int64_t     max_pps_timeouts = 30;
 
+    // GPIO used to drive the camera trigger lines in hardware modes. The
+    // Raspberry Pi 5 exposes the 40-pin header as gpiochip4 through
+    // pinctrl-rp1, where every previous generation used gpiochip0: an example
+    // written for a Pi 4 addresses an internal Broadcom controller with no
+    // header pins. Offsets 23 and 24 are physical pins 16 and 18; 18 is taken
+    // by the PPS overlay and 14 and 15 carry the GNSS UART.
+    std::string gpio_chip     = "gpiochip4";
+    int64_t     gpio_line_cam0 = 23;
+    int64_t     gpio_line_cam1 = 24;
+
+    // Pulse width. Far above the sensor minimum and negligible against the
+    // half-period; only the falling edge carries the instant, the line being
+    // held high at rest by the camera pull-up.
+    int64_t     gpio_pulse_us = 100;
+
     // Refuse to start unless the kernel reports the clock disciplined. The Pi
     // restores a stale date at boot and keeps it until the network answers, so
     // an unguarded burst can be filed weeks in the past. A missed slot is
@@ -144,6 +159,12 @@ inline void printUsage(const char* argv0)
         << "                        silence). A timeout does not advance the trigger\n"
         << "                        index, so without a ceiling a silent receiver makes\n"
         << "                        the burst run forever instead of failing.\n"
+        << "  --gpio-chip <name>    gpiod chip carrying the trigger lines (default:\n"
+        << "                        gpiochip4, which is the 40-pin header on a Pi 5;\n"
+        << "                        gpiochip0 is an internal controller with no pins).\n"
+        << "  --gpio-cam0 <n>       GPIO offset driving camera 0 (default: 23, pin 16).\n"
+        << "  --gpio-cam1 <n>       GPIO offset driving camera 1 (default: 24, pin 18).\n"
+        << "  --gpio-pulse-us <us>  Trigger pulse width (default: 100).\n"
         << "  --require-clock-sync  Refuse to start unless the kernel reports the system\n"
         << "                        clock disciplined. Intended for scheduled operation:\n"
         << "                        the Pi boots on a stale date until the network\n"
@@ -284,6 +305,31 @@ inline bool parseArgs(int argc, char** argv, Config& cfg, bool& help_requested)
                 return false;
             }
         }
+        else if (arg == "--gpio-chip")
+        {
+            if (!needValue(i, "--gpio-chip")) return false;
+            cfg.gpio_chip = argv[++i];
+        }
+        else if (arg == "--gpio-cam0")
+        {
+            if (!needValue(i, "--gpio-cam0")) return false;
+            cfg.gpio_line_cam0 = std::atol(argv[++i]);
+        }
+        else if (arg == "--gpio-cam1")
+        {
+            if (!needValue(i, "--gpio-cam1")) return false;
+            cfg.gpio_line_cam1 = std::atol(argv[++i]);
+        }
+        else if (arg == "--gpio-pulse-us")
+        {
+            if (!needValue(i, "--gpio-pulse-us")) return false;
+            cfg.gpio_pulse_us = std::atol(argv[++i]);
+            if (cfg.gpio_pulse_us < 1 || cfg.gpio_pulse_us > 100000)
+            {
+                std::cerr << "[CONFIG] --gpio-pulse-us must be between 1 and 100000.\n";
+                return false;
+            }
+        }
         else if (arg == "--require-clock-sync")
         {
             cfg.require_clock_sync = true;
@@ -400,6 +446,11 @@ struct BurstStats
     std::atomic<uint64_t> buffer_overflows{0};
     std::atomic<uint64_t> late_frames{0};
 
+    // A pulse the kernel refused. Counted rather than thrown: this is raised
+    // on the producer thread, where an exception crossing the thread boundary
+    // is an abort with extra steps.
+    std::atomic<uint64_t> trigger_errors{0};
+
     // Frames the device exposed and the driver never delivered, inferred
     // from discontinuities in the device frame identifier.
     std::atomic<uint64_t> fid_gaps{0};
@@ -502,6 +553,13 @@ inline bool writeManifest(const std::string&             path,
     f << "    \"exposure_locked\": " << (cfg.exposure_auto ? "false" : "true") << ",\n";
     f << "    " << jstr("cadence_anchor", "gnss_pps_1hz_plus_500ms_interpolation") << ",\n";
     f << "    " << jstr("pps_device", cfg.pps_device) << ",\n";
+    if (cfg.trigger != "software")
+    {
+        f << "    " << jstr("gpio_chip", cfg.gpio_chip) << ",\n";
+        f << "    \"gpio_line_cam0\": " << cfg.gpio_line_cam0 << ",\n";
+        f << "    \"gpio_line_cam1\": " << cfg.gpio_line_cam1 << ",\n";
+        f << "    \"gpio_pulse_us\": " << cfg.gpio_pulse_us << ",\n";
+    }
     f << "    \"clock_sync_required\": " << (cfg.require_clock_sync ? "true" : "false") << "\n";
     f << "  },\n";
 
@@ -737,7 +795,8 @@ inline bool writeSummary(const std::string& path,
     f << "    \"write_errors\": "     << stats.write_errors.load() << ",\n";
     f << "    \"transport_frame_id_gaps\": " << stats.fid_gaps.load() << ",\n";
     f << "    \"buffer_overflows\": "        << stats.buffer_overflows.load() << ",\n";
-    f << "    \"late_frames_skipped\": "     << stats.late_frames.load() << "\n";
+    f << "    \"late_frames_skipped\": "     << stats.late_frames.load() << ",\n";
+    f << "    \"trigger_errors\": "          << stats.trigger_errors.load() << "\n";
     f << "  },\n";
 
     f << "  \"transport_counters\": [\n";

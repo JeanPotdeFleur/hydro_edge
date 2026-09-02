@@ -50,6 +50,7 @@
 #include "Spinnaker.h"
 #include "SpinGenApi/SpinnakerGenApi.h"
 
+#include "GpioTrigger.h"
 #include "RingBuffer.h"
 #include "Session.h"
 
@@ -1009,6 +1010,35 @@ void producer_thread(CameraPtr                      cam0,
             }
         };
 
+        // The pulse generator, in hardware trigger modes only. Requested once
+        // and held for the whole burst: opening the chip four times a second,
+        // on the one code path whose punctuality is the measurement, would be
+        // paying jitter for nothing. Failure here is fatal to the burst rather
+        // than degraded to software triggering, which would silently produce a
+        // dataset acquired under a configuration the manifest does not
+        // describe.
+        std::unique_ptr<GpioTrigger> gpio;
+        if (cfg.trigger != "software")
+        {
+            try
+            {
+                gpio = std::make_unique<GpioTrigger>(
+                    cfg.gpio_chip, static_cast<unsigned int>(cfg.gpio_line_cam0),
+                    static_cast<unsigned int>(cfg.gpio_line_cam1),
+                    static_cast<unsigned int>(cfg.gpio_pulse_us));
+                std::cout << "[THREAD 1] GPIO trigger on " << cfg.gpio_chip << " lines "
+                          << cfg.gpio_line_cam0 << " and " << cfg.gpio_line_cam1
+                          << ", open-drain, " << cfg.gpio_pulse_us << " us pulse.\n";
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "[CRITICAL] " << e.what() << "\n";
+                keep_running = false;
+                buffer->shutdown();
+                return;
+            }
+        }
+
         // One trigger event: fire both sensors, retrieve both frames, and
         // either push the pair or account for its loss. A pair is pushed only
         // if both halves are complete, a half-pair being useless for the
@@ -1024,11 +1054,21 @@ void producer_thread(CameraPtr                      cam0,
 
             if (cfg.trigger == "software")
             {
+                // Two sequential USB transactions, so the two sensors do not
+                // expose at the same instant. The offset is not visible in the
+                // device timestamps, which are dominated by the 1.1 ppm drift
+                // between the two sensor oscillators.
                 cam0->TriggerSoftware.Execute();
                 cam1->TriggerSoftware.Execute();
             }
-            // Hardware modes need no software action: the pulse arrives on the
-            // selected line. UNVALIDATED.
+            else if (gpio)
+            {
+                // One register write drops both lines together, so both
+                // sensors see the same falling edge. This is the whole point
+                // of the hardware path: two separate writes would reintroduce
+                // the offset it exists to remove.
+                if (!gpio->pulse()) stats->trigger_errors.fetch_add(1);
+            }
 
             try
             {
@@ -1456,6 +1496,7 @@ int main(int argc, char** argv)
                   << (static_cast<double>(stats->frames_written.load()) *
                       static_cast<double>(payload) * cams.size() / wall_s / 1e6)
                   << " MB/s mean\n";
+        std::cout << "[SUMMARY] trigger errors " << stats->trigger_errors.load() << "\n";
         std::cout << "[SUMMARY] buffer overflows " << stats->buffer_overflows.load()
                   << ", late frames skipped " << stats->late_frames.load() << "\n";
         std::cout << "[SUMMARY] transport frame id gaps " << stats->fid_gaps.load()

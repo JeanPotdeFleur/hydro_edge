@@ -69,3 +69,7 @@ target_link_libraries(cam_probe ${SPINNAKER_LIBRARY})
 add_executable(cam_focus tools/cam_focus.cpp)
 target_include_directories(cam_focus PRIVATE ${SPINNAKER_INCLUDE_DIR})
 target_link_libraries(cam_focus ${OpenCV_LIBS} ${SPINNAKER_LIBRARY})
+# libgpiod 1.6, for the hardware trigger pulse. The v2 C API is incompatible
+# and GpioTrigger.h guards against it at compile time.
+find_library(GPIOD_LIBRARY NAMES gpiod REQUIRED)
+target_link_libraries(hydro_edge ${GPIOD_LIBRARY})
