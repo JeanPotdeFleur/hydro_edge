@@ -73,3 +73,9 @@ target_link_libraries(cam_focus ${OpenCV_LIBS} ${SPINNAKER_LIBRARY})
 # and GpioTrigger.h guards against it at compile time.
 find_library(GPIOD_LIBRARY NAMES gpiod REQUIRED)
 target_link_libraries(hydro_edge ${GPIOD_LIBRARY})
+
+# RAW reader, fourth target. Reads back an archived frame on site and reports
+# the DN distribution: verify_burst.py establishes that every file is the
+# declared size, and says nothing about whether the frames are usable.
+add_executable(decode tools/decode.cpp)
+target_link_libraries(decode ${OpenCV_LIBS})
