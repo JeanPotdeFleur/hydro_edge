@@ -826,7 +826,8 @@ static bool checkFreeSpace(const std::string& root, uint64_t required_bytes, std
 
 void consumer_thread(std::shared_ptr<RingBuffer>     buffer,
                      std::shared_ptr<BurstStats>     stats,
-                     std::vector<std::string>        cam_dirs)
+                     std::vector<std::string>        cam_dirs,
+                     Config                          cfg)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -841,8 +842,50 @@ void consumer_thread(std::shared_ptr<RingBuffer>     buffer,
     StereoFrame frame;
     char        name[32];
 
+    // GATE A3 instrumentation. The ring buffer exists to absorb a transient
+    // stall of the writer; GATE A1 proved only that it never overflowed, which
+    // on an idle drive and an open bench it had no occasion to do. Absorption
+    // is a different property and it is exercised here by stopping the writer
+    // on purpose and watching the buffer fill and drain.
+    //
+    // Off unless both options are given, in which case the loop below is the
+    // one GATE A1 validated, instruction for instruction.
+    const bool stall_armed = (cfg.stall_at_index > 0 && cfg.stall_seconds > 0);
+    bool       stalled     = false;
+    bool       recovering  = false;
+
     while (buffer->pop(frame))
     {
+        if (stall_armed && !stalled &&
+            frame.index >= static_cast<uint64_t>(cfg.stall_at_index))
+        {
+            stalled = true;
+            std::cout << "[STALL] Consumer stopping for " << cfg.stall_seconds
+                      << " s at index " << frame.index << ", buffer at "
+                      << buffer->occupancy() << "/" << buffer->capacity() << "\n";
+            std::cout.flush();
+
+            // Sampled every second rather than at the two ends, because the
+            // fill rate is the measurement: at 2 Hz one stereo frame enters
+            // every 500 ms, so the occupancy should climb by two per second
+            // until it saturates. A departure from that slope means the
+            // producer is not running at the cadence it reports.
+            for (int64_t sec = 1; sec <= cfg.stall_seconds; ++sec)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                std::cout << "[STALL] +" << sec << " s, buffer "
+                          << buffer->occupancy() << "/" << buffer->capacity()
+                          << ", overflows " << stats->buffer_overflows.load() << "\n";
+                std::cout.flush();
+            }
+
+            std::cout << "[STALL] Consumer resuming, buffer at "
+                      << buffer->occupancy() << "/" << buffer->capacity()
+                      << ", peak " << buffer->highWater() << "\n";
+            std::cout.flush();
+            recovering = true;
+        }
+
         std::snprintf(name, sizeof(name), "%06llu.raw",
                       static_cast<unsigned long long>(frame.index));
 
@@ -885,6 +928,25 @@ void consumer_thread(std::shared_ptr<RingBuffer>     buffer,
             stats->write_errors.fetch_add(1);
             stats->recordMissing(frame.index);
             std::cerr << "[I/O] Write failure on index " << frame.index << "\n";
+        }
+
+        // The drain is as informative as the fill and cannot be read from the
+        // sixty-second heartbeat. The writer commits about five stereo frames
+        // per second against two arriving, so the queue should shorten by
+        // roughly three per second; a slower recovery means the drive, not the
+        // buffer, is the limit.
+        if (recovering)
+        {
+            const size_t occ = buffer->occupancy();
+            std::cout << "[DRAIN] index " << frame.index << ", buffer " << occ
+                      << "/" << buffer->capacity() << "\n";
+            if (occ <= 1)
+            {
+                recovering = false;
+                std::cout << "[DRAIN] Nominal occupancy restored at index "
+                          << frame.index << ".\n";
+            }
+            std::cout.flush();
         }
     }
 
@@ -1457,7 +1519,7 @@ int main(int argc, char** argv)
 
         const auto t_start = std::chrono::steady_clock::now();
 
-        std::thread t2(consumer_thread, buffer, stats, cam_dirs);
+        std::thread t2(consumer_thread, buffer, stats, cam_dirs, cfg);
         std::thread t1(producer_thread, session.cam(0), session.cam(1), buffer, stats, cfg,
                        cams);
 

@@ -106,6 +106,14 @@ struct Config
     // held high at rest by the camera pull-up.
     int64_t     gpio_pulse_us = 100;
 
+    // Deliberate consumer stall, for GATE A3. GATE A1 established that the
+    // ring buffer does not overflow; it never established that it absorbs,
+    // which is the only reason the buffer exists. Both default to zero, which
+    // disables the instrumentation entirely: the nominal consumer loop is then
+    // byte-identical to the one GATE A1 validated.
+    int64_t     stall_at_index = 0;
+    int64_t     stall_seconds  = 0;
+
     // Refuse to start unless the kernel reports the clock disciplined. The Pi
     // restores a stale date at boot and keeps it until the network answers, so
     // an unguarded burst can be filed weeks in the past. A missed slot is
@@ -165,6 +173,14 @@ inline void printUsage(const char* argv0)
         << "  --gpio-cam0 <n>       GPIO offset driving camera 0 (default: 23, pin 16).\n"
         << "  --gpio-cam1 <n>       GPIO offset driving camera 1 (default: 24, pin 18).\n"
         << "  --gpio-pulse-us <us>  Trigger pulse width (default: 100).\n"
+        << "  --stall-at <index>    Deliberately stall the consumer once, on reaching this\n"
+        << "                        trigger index. Instrumentation for GATE A3; zero, the\n"
+        << "                        default, disables it and leaves the consumer loop\n"
+        << "                        unchanged.\n"
+        << "  --stall-s <seconds>   Duration of that stall. At 2 Hz the ring buffer takes\n"
+        << "                        one frame every 500 ms while stalled, so 30 s fills 60\n"
+        << "                        slots exactly: below that the buffer must absorb, above\n"
+        << "                        it must overflow and account for every lost frame.\n"
         << "  --require-clock-sync  Refuse to start unless the kernel reports the system\n"
         << "                        clock disciplined. Intended for scheduled operation:\n"
         << "                        the Pi boots on a stale date until the network\n"
@@ -327,6 +343,26 @@ inline bool parseArgs(int argc, char** argv, Config& cfg, bool& help_requested)
             if (cfg.gpio_pulse_us < 1 || cfg.gpio_pulse_us > 100000)
             {
                 std::cerr << "[CONFIG] --gpio-pulse-us must be between 1 and 100000.\n";
+                return false;
+            }
+        }
+        else if (arg == "--stall-at")
+        {
+            if (!needValue(i, "--stall-at")) return false;
+            cfg.stall_at_index = std::atol(argv[++i]);
+            if (cfg.stall_at_index < 0)
+            {
+                std::cerr << "[CONFIG] --stall-at must be non-negative.\n";
+                return false;
+            }
+        }
+        else if (arg == "--stall-s")
+        {
+            if (!needValue(i, "--stall-s")) return false;
+            cfg.stall_seconds = std::atol(argv[++i]);
+            if (cfg.stall_seconds < 0 || cfg.stall_seconds > 600)
+            {
+                std::cerr << "[CONFIG] --stall-s must be between 0 and 600.\n";
                 return false;
             }
         }
@@ -553,6 +589,13 @@ inline bool writeManifest(const std::string&             path,
     f << "    \"exposure_locked\": " << (cfg.exposure_auto ? "false" : "true") << ",\n";
     f << "    " << jstr("cadence_anchor", "gnss_pps_1hz_plus_500ms_interpolation") << ",\n";
     f << "    " << jstr("pps_device", cfg.pps_device) << ",\n";
+    if (cfg.stall_at_index > 0 && cfg.stall_seconds > 0)
+    {
+        // Recorded so that an archive produced under deliberate stall is never
+        // mistaken for a nominal one.
+        f << "    \"stall_at_index\": " << cfg.stall_at_index << ",\n";
+        f << "    \"stall_seconds\": " << cfg.stall_seconds << ",\n";
+    }
     if (cfg.trigger != "software")
     {
         f << "    " << jstr("gpio_chip", cfg.gpio_chip) << ",\n";
