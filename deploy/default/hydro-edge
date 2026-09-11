@@ -25,3 +25,16 @@ HYDRO_CAM1=24260193
 HYDRO_EXPOSURE_US=5000
 HYDRO_TRIGGER=line2
 HYDRO_GAIN_DB=0
+
+# Second volume, offered to the burst wrapper. It picks whichever of the two
+# has more room, which is how the pair reaches fifty days at two bursts a day
+# where a single volume gives 24.5.
+HYDRO_OUTPUT_ALT=/mnt/vault2
+
+# Working copy of the public transport repository. The station pushes the
+# morning image and its status here and reads the day's plan back, being
+# behind the institutional NAT with nothing servable from it directly.
+HYDRO_SITE=/home/bakerlab/hopkins-station
+
+# Repository root, used by the daily scripts to locate the binaries.
+HYDRO_ROOT=/home/bakerlab/hydro_edge

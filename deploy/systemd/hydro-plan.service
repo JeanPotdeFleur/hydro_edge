@@ -1,0 +1,19 @@
+[Unit]
+Description=Hydro station daily plan resolution
+Documentation=https://github.com/JeanPotdeFleur/hydro_edge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bakerlab
+Group=bakerlab
+EnvironmentFile=/etc/default/hydro-edge
+ExecStart=/home/bakerlab/hydro_edge/scripts/fetch_plan.sh
+
+SyslogIdentifier=hydro-plan
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

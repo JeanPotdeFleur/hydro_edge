@@ -1,0 +1,13 @@
+[Unit]
+Description=Hydro station plan resolution at 09:50 Pacific
+
+[Timer]
+# Ten minutes before the first slot, which is the rule: an edit arriving after
+# this has no effect on today, and a burst never reads the network as it fires.
+OnCalendar=*-*-* 09:50:00 America/Los_Angeles
+Persistent=false
+AccuracySec=10s
+Unit=hydro-plan.service
+
+[Install]
+WantedBy=timers.target

@@ -45,7 +45,7 @@ Restart=no
 RuntimeMaxSec=3000
 
 # SIGTERM on stop, and enough time to drain: sixty ring buffer slots hold
-# 1.9 GB, about twelve seconds at the measured write rate.
+# 1.9 GB, about sixteen seconds at the rate measured in GATE A3.
 KillSignal=SIGTERM
 TimeoutStopSec=180
 

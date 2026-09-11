@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopkins rocky-shore camera station</title>
+<style>
+  :root{
+    --deep:#0E242B;     /* Monterey water in shade */
+    --slate:#17333C;
+    --line:#2A4A54;
+    --foam:#EBF0EE;
+    --kelp:#8AA79A;
+    --brass:#C79A3F;
+    --brick:#B24A40;
+    --tide:#6FA79E;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--deep);color:var(--foam);
+    font-family:"Avenir Next","Avenir","Segoe UI",system-ui,sans-serif;
+    font-size:17px;line-height:1.5;
+  }
+  .num{font-family:ui-monospace,"SF Mono",Menlo,monospace;
+       font-variant-numeric:tabular-nums;font-size:.94em}
+  a{color:var(--tide)}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--brass);outline-offset:3px}
+
+  figure{margin:0;background:var(--slate);border-bottom:1px solid var(--line)}
+  .shot{aspect-ratio:3/1;max-height:58vh;overflow:hidden;
+        display:flex;align-items:center;justify-content:center}
+  .shot img{width:100%;height:100%;object-fit:cover;display:block;
+            opacity:0;transition:opacity .5s ease}
+  .shot img.in{opacity:1}
+  .shot p{margin:0;padding:0 1.2rem;color:var(--kelp);text-align:center;
+          font-size:.95rem;max-width:26rem}
+  @media (prefers-reduced-motion:reduce){.shot img{transition:none}}
+  .verdict{padding:.75rem 1.1rem;border-top:1px solid var(--line);
+           display:flex;gap:.9rem;align-items:baseline;flex-wrap:wrap}
+  .dot{width:.62rem;height:.62rem;border-radius:50%;flex:0 0 auto;
+       background:var(--tide);transform:translateY(-.1rem)}
+  .attention .dot{background:var(--brass)} .fault .dot{background:var(--brick)}
+  .verdict b{font-weight:600} .verdict span{color:var(--kelp);font-size:.9rem}
+
+  main{max-width:44rem;margin:0 auto;padding:1.6rem 1.1rem 4rem}
+  h1{font-size:1.02rem;font-weight:600;letter-spacing:.01em;margin:0 0 .15rem}
+  .sub{color:var(--kelp);font-size:.9rem;margin:0 0 2rem}
+
+  .today{border-left:2px solid var(--brass);padding:.1rem 0 .1rem 1rem;margin:0 0 1.5rem}
+  .today p{margin:.15rem 0}
+  .today .big{font-size:1.3rem;font-weight:600}
+  button{
+    margin-top:.9rem;font:inherit;font-size:.95rem;color:var(--deep);
+    background:var(--brass);border:0;border-radius:2px;
+    padding:.55rem 1rem;cursor:pointer;
+  }
+  button:hover{background:#d8ab4c}
+
+  dl{display:grid;grid-template-columns:1fr auto;gap:0;margin:0 0 1.6rem;
+     border-top:1px solid var(--line)}
+  dt,dd{margin:0;padding:.5rem 0;border-bottom:1px solid var(--line)}
+  dd{text-align:right}
+  dt{color:var(--kelp)}
+  h2{font-size:.95rem;font-weight:600;color:var(--foam);margin:0 0 .3rem}
+
+  table{width:100%;border-collapse:collapse;font-size:.93rem}
+  th{text-align:left;font-weight:500;color:var(--kelp);padding:.45rem 0;
+     border-bottom:1px solid var(--line)}
+  td{padding:.45rem 0;border-bottom:1px solid var(--line)}
+  td:last-child,th:last-child{text-align:right}
+  .bad{color:var(--brick)}
+  ul.why{margin:.4rem 0 0;padding-left:1.1rem;color:var(--kelp);font-size:.92rem}
+  footer{color:var(--kelp);font-size:.85rem;margin-top:2.2rem}
+</style>
+</head>
+<body>
+
+<figure>
+  <div class="shot">
+    <img id="shot" alt="Most recent morning view from the station">
+    <p id="noshot" hidden>No morning image published yet. The station takes the
+    first one at 08:00.</p>
+  </div>
+  <figcaption class="verdict" id="verdict">
+    <span class="dot"></span><b id="vtext">Loading</b><span id="vwhen"></span>
+  </figcaption>
+</figure>
+
+<main>
+  <h1>Hopkins rocky-shore camera station</h1>
+  <p class="sub">Agassiz rooftop, Hopkins Marine Station. The view above is
+  taken fresh at 08:00 each morning.</p>
+
+  <section class="today">
+    <p class="big" id="planline">&mdash;</p>
+    <p id="planwhy"></p>
+    <button id="edit" type="button">Change today's plan</button>
+    <p class="sub" style="margin:.6rem 0 0">Edits made before 09:45 Pacific take
+    effect today. Set <span class="num">date</span> to today's date,
+    <span class="num">bursts</span> between 0 and 3, and
+    <span class="num">exposure_us</span> between 100 and 20000.</p>
+  </section>
+
+  <h2>Metered this morning</h2>
+  <dl id="metered"></dl>
+
+  <h2>Station</h2>
+  <dl id="station"></dl>
+
+  <h2>Recent bursts</h2>
+  <table><thead><tr><th>Burst</th><th>Frames</th><th>Result</th></tr></thead>
+    <tbody id="bursts"></tbody></table>
+
+  <footer id="foot"></footer>
+</main>
+
+<script>
+const OWNER = "JeanPotdeFleur", REPO = "hopkins-station";
+const EDIT = `https://github.com/${OWNER}/${REPO}/edit/main/control/plan.json`;
+document.getElementById("edit").onclick = () => window.open(EDIT, "_blank");
+
+const q = "?t=" + Date.now();
+const img = document.getElementById("shot");
+img.onload = () => img.classList.add("in");
+img.onerror = () => {
+  img.hidden = true;
+  document.getElementById("noshot").hidden = false;
+};
+img.src = "latest.jpg" + q;
+
+const pad = n => String(n).padStart(2, "0");
+const local = iso => {
+  const d = new Date(iso);
+  return d.toLocaleString("en-GB", { weekday: "short", day: "numeric",
+    month: "short", hour: "2-digit", minute: "2-digit",
+    timeZone: "America/Los_Angeles" });
+};
+const row = (dl, k, v) => {
+  const dt = document.createElement("dt"); dt.textContent = k;
+  const dd = document.createElement("dd"); dd.className = "num";
+  dd.textContent = (v === null || v === undefined) ? "\u2014" : v;
+  dl.append(dt, dd);
+};
+
+fetch("status.json" + q).then(r => r.json()).then(s => {
+  const ageH = (Date.now() - new Date(s.generated_utc)) / 3.6e6;
+  const box = document.getElementById("verdict");
+  const vt = document.getElementById("vtext");
+  const vw = document.getElementById("vwhen");
+
+  if (ageH > 26) {
+    box.className = "verdict fault";
+    vt.textContent = "No report today";
+    vw.textContent = "The station last reported " + local(s.generated_utc) +
+                     ". Check that it is powered and on the network.";
+  } else {
+    const h = s.health || {};
+    box.className = "verdict " + (h.verdict === "fault" ? "fault"
+                  : h.verdict === "attention" ? "attention" : "");
+    vt.textContent = h.verdict === "fault" ? "Needs attention now"
+                   : h.verdict === "attention" ? "Running, with something to note"
+                   : "Running normally";
+    vw.textContent = "Reported " + local(s.generated_utc);
+    const all = (h.faults || []).concat(h.notes || []);
+    if (all.length) {
+      const ul = document.createElement("ul"); ul.className = "why";
+      all.forEach(t => { const li = document.createElement("li");
+                         li.textContent = t; ul.append(li); });
+      box.append(ul);
+    }
+  }
+
+  const p = s.plan || {}, slots = p.slots || [];
+  const hhmm = t => t.slice(0, 2) + ":" + t.slice(2);
+  document.getElementById("planline").textContent =
+    slots.length === 0 ? "No burst today"
+    : `${slots.length} burst${slots.length > 1 ? "s" : ""} \u2014 ` +
+      slots.map(hhmm).join(" and ");
+  document.getElementById("planwhy").textContent =
+    (p.source === "plan" ? "From today's plan" : "Standard schedule")
+    + (p.exposure_us ? `, exposure ${p.exposure_us} \u00b5s`
+                     : ", exposure from the station's own setting")
+    + (p.reason && p.source !== "plan" ? ` (${p.reason})` : "");
+
+  const m = s.morning || {}, r = m.radiometry || {};
+  const dm = document.getElementById("metered");
+  row(dm, "Exposure the scene called for", m.exposure_us ? m.exposure_us + " \u00b5s" : null);
+  row(dm, "Gain", m.gain_db !== undefined ? m.gain_db + " dB" : null);
+  row(dm, "Saturated pixels", r.sat_pct !== undefined ? r.sat_pct + " %" : null);
+  row(dm, "Median level", r.p50 !== undefined ? r.p50 + " DN" : null);
+  row(dm, "Brightest", r.pmax !== undefined ? r.pmax + " DN" : null);
+
+  const st = s.station || {}, ds = document.getElementById("station");
+  (s.storage || []).forEach(v =>
+    row(ds, "Free on " + v.mount, v.free_gb + " GB, " + v.used_pct + " % used"));
+  row(ds, "Die temperature", st.soc_temp_c !== null ? st.soc_temp_c + " \u00b0C" : null);
+  row(ds, "Clock disciplined", st.clock_synchronised ? "yes" : "no");
+  row(ds, "Timepulse advancing", st.pps_pulsing ? "yes" : "no");
+  row(ds, "Journal anomalies, 24 h", s.journal_anomalies_24h);
+
+  const tb = document.getElementById("bursts");
+  (s.bursts || []).forEach(b => {
+    const tr = document.createElement("tr");
+    const ok = b.completed && !b.lost;
+    tr.innerHTML =
+      `<td class="num">${b.ended_utc ? local(b.ended_utc) : b.id}</td>` +
+      `<td class="num">${b.frames ?? "\u2014"}${b.target ? " / " + b.target : ""}</td>` +
+      `<td class="${ok ? "" : "bad"}">${ok ? "complete"
+        : (b.completed ? b.lost + " frames lost" : "incomplete")}</td>`;
+    tb.append(tr);
+  });
+  if (!(s.bursts || []).length) {
+    tb.innerHTML = '<tr><td colspan="3">No burst on record yet.</td></tr>';
+  }
+
+  document.getElementById("foot").textContent =
+    "Served from GitHub Pages. The station pushes here each morning; it cannot "
+    + "be reached from outside the campus network.";
+}).catch(() => {
+  const box = document.getElementById("verdict");
+  box.className = "verdict fault";
+  document.getElementById("vtext").textContent = "No report from the station yet";
+  document.getElementById("vwhen").textContent =
+    "status.json has not been published here. It appears after the first "
+    + "morning cycle.";
+  document.getElementById("planline").textContent = "Schedule not known yet";
+});
+</script>
+</body>
+</html>

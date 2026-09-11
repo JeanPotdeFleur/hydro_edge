@@ -1,0 +1,27 @@
+[Unit]
+Description=Hydro station morning capture and publication
+Documentation=https://github.com/JeanPotdeFleur/hydro_edge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bakerlab
+Group=bakerlab
+EnvironmentFile=/etc/default/hydro-edge
+
+# Sequential and in this order: the push has nothing to publish until the
+# capture has run. Two timers would have let the second fire first.
+ExecStart=/home/bakerlab/hydro_edge/scripts/morning_snapshot.sh
+ExecStart=/home/bakerlab/hydro_edge/scripts/push_status.sh
+
+# A failed capture must not suppress the status push, which is precisely what
+# an operator needs to see when the cameras are the thing that failed.
+SuccessExitStatus=0 1
+
+SyslogIdentifier=hydro-morning
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

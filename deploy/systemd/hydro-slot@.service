@@ -1,0 +1,44 @@
+[Unit]
+Description=Hydro edge burst slot %i, subject to the day's plan
+Documentation=https://github.com/JeanPotdeFleur/hydro_edge
+
+# Same prerequisite as hydro-burst@.service: with /mnt/vault unmounted,
+# statvfs reports the free space of the boot microSD instead.
+RequiresMountsFor=/mnt/vault
+
+# Ordering only. The clock gate is inside the binary and frees the slot fast.
+Wants=time-sync.target
+After=time-sync.target network-online.target
+
+[Service]
+Type=exec
+User=bakerlab
+Group=bakerlab
+
+EnvironmentFile=/etc/default/hydro-edge
+
+# The wrapper decides whether this slot runs today, picks the emptier volume,
+# applies the day's exposure, and records the plan beside the manifest. It
+# exits zero without acquiring when the slot is not scheduled, so a suppressed
+# burst is not a failure.
+ExecStart=/home/bakerlab/hydro_edge/scripts/run_burst.sh %i 2400
+
+# Deliberately no restart, for the reason given in hydro-burst@.service: the
+# binary exits 1 on any incomplete burst, so a restart would relaunch a
+# forty-minute acquisition that has already written 155 GB.
+Restart=no
+
+RuntimeMaxSec=3000
+
+# systemd signals the whole control group, so the binary receives SIGTERM
+# directly and drains the ring buffer itself. Sixty stereo slots hold 1.936 GB,
+# about sixteen seconds at the rate measured in GATE A3.
+KillSignal=SIGTERM
+TimeoutStopSec=180
+
+SyslogIdentifier=hydro-slot
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

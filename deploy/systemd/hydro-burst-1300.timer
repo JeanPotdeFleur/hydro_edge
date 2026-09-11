@@ -10,7 +10,7 @@ OnCalendar=*-*-* 13:00:00 America/Los_Angeles
 # than the slot it recovers.
 Persistent=false
 AccuracySec=1s
-Unit=hydro-burst@2400.service
+Unit=hydro-slot@1300.service
 
 [Install]
 WantedBy=timers.target

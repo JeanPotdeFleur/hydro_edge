@@ -1,0 +1,14 @@
+[Unit]
+Description=Hydro station morning capture at 08:00 Pacific
+
+[Timer]
+# The system clock is UTC, so the calendar is qualified explicitly.
+OnCalendar=*-*-* 08:00:00 America/Los_Angeles
+# A missed morning is missed: an image taken at an arbitrary hour after a boot
+# would misinform the operator about the light.
+Persistent=false
+AccuracySec=30s
+Unit=hydro-morning.service
+
+[Install]
+WantedBy=timers.target
