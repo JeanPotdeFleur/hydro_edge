@@ -2,3 +2,4 @@ build/
 decode
 tools/decode
 focus.jpg
+__pycache__/
