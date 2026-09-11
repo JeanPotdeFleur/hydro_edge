@@ -29,6 +29,7 @@ ExecStart=/home/bakerlab/hydro_edge/build/hydro_edge \
     --cam1-serial ${HYDRO_CAM1} \
     --exposure-us ${HYDRO_EXPOSURE_US} \
     --gain-db ${HYDRO_GAIN_DB} \
+    --trigger ${HYDRO_TRIGGER} \
     --require-clock-sync
 
 # Deliberately no restart. The binary exits 1 whenever a burst ran without

@@ -979,11 +979,12 @@ void producer_thread(CameraPtr                      cam0,
               << " triggers at " << kSamplingRateHz << " Hz, trigger source " << cfg.trigger
               << ".\n";
 
-    if (cfg.trigger != "software")
+        if (cfg.trigger == "line0")
     {
-        std::cerr << "[THREAD 1] WARNING: hardware triggering selected. This path has never "
-                     "been exercised; if no pulse reaches the cameras the loop will time out "
-                     "on every retrieval.\n";
+        std::cerr << "[THREAD 1] WARNING: Line0 selected. That input is opto-isolated and "
+                     "specified for 5 V, so a 3.3 V drive from the Pi is marginal; the mode "
+                     "is written but has never been exercised. If no pulse reaches the "
+                     "cameras the loop will time out on every retrieval.\n";
     }
 
     // Reserved up front. A reallocation of several hundred kilobytes in the

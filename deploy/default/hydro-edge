@@ -9,9 +9,19 @@
 # microseconds, white foam clipping well before the 5000 the binary defaults
 # to. Under fog it is several milliseconds. It is expected to change between
 # deployments and must be revisited whenever the optics or the site do.
+#
+# The trigger mode belongs here rather than in the unit because it is the one
+# acquisition parameter whose correct value was established after the unit was
+# written. GATE A2 measured a +297.2 us inter-camera exposure offset under
+# software triggering and its removal under line2, making line2 the
+# configuration of record; the binary still defaults to software, which is the
+# right default for a bench without the Hirose harness and the wrong one for
+# the roof. An unset variable expands to an empty string and the binary exits 2
+# on a missing argument, which is the failure mode to want here.
 
 HYDRO_OUTPUT=/mnt/vault
 HYDRO_CAM0=24260192
 HYDRO_CAM1=24260193
 HYDRO_EXPOSURE_US=5000
+HYDRO_TRIGGER=line2
 HYDRO_GAIN_DB=0

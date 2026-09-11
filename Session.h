@@ -58,14 +58,21 @@ struct Config
 
     // Radiometry. Locked by default: the OCM applies f-k transforms to
     // luminance time series, and an exposure that drifts frame to frame
-    // injects its own modulation into the spectrum. 5000 us is the middle of
-    // the 4-8 ms window of Appendix E, which freezes foam motion at f/4.
+    // injects its own modulation into the spectrum. 5000 us is a bench value
+    // and clips in every diurnal case: the outdoor measurement of 1 September
+    // puts the working exposure near 450 us at f/1.8, so about 2200 us at f/4,
+    // and establishes that the bound is clipping rather than motion blur. The
+    // 4-8 ms window of Appendix E was a fog figure presented as general. The
+    // deployment value is measured on site and set in /etc/default/hydro-edge.
     double      exposure_us   = 5000.0;
     double      gain_db       = 0.0;
     bool        exposure_auto = false;   // bench escape hatch only
 
-    // Triggering. Hardware branches are written but unvalidated: they need
-    // cabling that is not yet on hand.
+    // Triggering. line2 is the configuration of record since GATE A2, which
+    // measured a +297.2 us inter-camera exposure offset under software
+    // triggering and its removal under hardware. The default stays software
+    // because a bench without the Hirose harness is the common case; the
+    // deployment value is set in /etc/default/hydro-edge.
     std::string trigger       = "software";   // software | line2 | line0
 
     // Transport-layer buffer pool, per camera. Chosen rather than inherited:

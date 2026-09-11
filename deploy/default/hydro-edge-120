@@ -7,3 +7,8 @@
 # acquisitions.
 
 HYDRO_OUTPUT=/mnt/vault/soak
+
+# The soak exercises the scheduling sequence and not the trigger path, so it
+# stays on software triggering: GATE S was measured that way, and it removes a
+# dependency on the GPIO harness being connected for an unattended night.
+HYDRO_TRIGGER=software
