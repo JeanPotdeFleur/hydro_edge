@@ -215,8 +215,9 @@ fetch("status.json" + q).then(r => r.json()).then(s => {
   }
 
   document.getElementById("foot").textContent =
-    "Served from GitHub Pages. The station pushes here each morning; it cannot "
-    + "be reached from outside the campus network.";
+  "This page is public and works from anywhere, on any network. The station "
+    + "itself sits behind the campus network and cannot be reached directly, "
+    + "so it publishes here each morning instead.";
 }).catch(() => {
   const box = document.getElementById("verdict");
   box.className = "verdict fault";

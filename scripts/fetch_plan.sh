@@ -30,10 +30,18 @@ else
     log "no clone at ${SITE}; reading whatever plan is on disk without refreshing it."
 fi
 
-python3 - "${SITE}/control/plan.json" "$ACTIVE" "$TODAY" <<'PYEOF'
+# When the plan carries no explicit date, the day it applies to is the day it
+# was committed. Asking a researcher to retype today's date every morning is a
+# needless source of error, and the commit timestamp is a fact GitHub records
+# for them. Only a plan prepared for a future date needs the field filled in.
+COMMITTED="$(TZ=America/Los_Angeles git -C "$SITE" log -1 \
+    --format=%cd --date=format-local:%Y-%m-%d -- control/plan.json 2>/dev/null)"
+[ -n "$COMMITTED" ] || COMMITTED="unknown"
+
+python3 - "${SITE}/control/plan.json" "$ACTIVE" "$TODAY" "$COMMITTED" <<'PYEOF'
 import json, sys, os, datetime
 
-src, dst, today = sys.argv[1], sys.argv[2], sys.argv[3]
+src, dst, today, committed = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 SLOTS = {0: [], 1: ["1000"], 2: ["1000", "1700"], 3: ["1000", "1300", "1700"]}
 DEFAULT = {"source": "default", "date": today, "bursts": 2,
@@ -60,8 +68,18 @@ except FileNotFoundError:
 except Exception as exc:
     DEFAULT["reason"] = f"plan unreadable: {exc}"; emit(DEFAULT)
 
-if str(raw.get("date")) != today:
-    DEFAULT["reason"] = f"plan dated {raw.get('date')}, not {today}"
+# An explicit date wins, which is how a plan is prepared a day ahead; with
+# none, the plan speaks for the day it was committed and expires on its own.
+stated = raw.get("date")
+if stated:
+    effective, origin = str(stated), "stated"
+else:
+    effective, origin = committed, "committed"
+
+if effective != today:
+    DEFAULT["reason"] = (f"plan {origin} for {effective}, not {today}"
+                         if effective != "unknown"
+                         else "commit date of the plan could not be read")
     emit(DEFAULT)
 
 try:
@@ -82,7 +100,8 @@ if exposure is not None:
         DEFAULT["reason"] = f"exposure_us={exposure} outside 100 to 20000"
         emit(DEFAULT)
 
-emit({"source": "plan", "date": today, "bursts": bursts,
-      "slots": SLOTS[bursts], "exposure_us": exposure,
-      "reason": "accepted", "note": str(raw.get("note", ""))[:200]})
+emit({"source": "plan", "date": today, "date_from": origin,
+      "bursts": bursts, "slots": SLOTS[bursts], "exposure_us": exposure,
+      "reason": f"accepted, dated by {origin} date",
+      "note": str(raw.get("note", ""))[:200]})
 PYEOF
