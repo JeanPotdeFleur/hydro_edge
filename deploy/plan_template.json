@@ -10,7 +10,7 @@
   "_bursts": "0, 1, 2 or 3.  1 = 10:00.  2 = 10:00 and 17:00.  3 = 10:00, 13:00 and 17:00.  Each burst lasts 40 minutes.",
 
   "exposure_us": null,
-  "_exposure_us": "100 to 20000, or null to keep the station's own value. The morning image on the status page shows what the scene called for.",
+  "_exposure_us": "100 to 20000, in microseconds, or null to keep the station's own value. The morning image on the status page shows what the scene called for. Raise it in fog, lower it in bright sun: the risk at the top is clipping the foam, which is the tracer.",
 
   "note": "",
   "_note": "Free text, why today is being treated this way. It is copied into the archive beside the frames and shown on the status page.",

@@ -177,6 +177,7 @@ fetch("status.json" + q).then(r => r.json()).then(s => {
   }
 
   appliedPlan = s.plan || {};
+  settings = s.settings || {};
   maybeRender();
 
   const m = s.morning || {}, r = m.radiometry || {};
@@ -253,8 +254,12 @@ function slotLine(slots) {
        + slots.map(slotTime).join(slots.length > 2 ? ", " : " and ");
 }
 
+let settings = {};
 const exposurePhrase = e =>
-  e ? `exposure ${e} \u00b5s` : "exposure from the station's own setting";
+  e ? `exposure ${e} \u00b5s, set for today`
+    : (settings.exposure_us
+        ? `exposure ${settings.exposure_us} \u00b5s, the station's own setting`
+        : "exposure from the station's own setting");
 
 // The same bounds the station applies, so the page never promises what will be
 // refused, and names the field that is wrong rather than saying something is.

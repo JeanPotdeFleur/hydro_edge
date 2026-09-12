@@ -28,11 +28,15 @@ fi
 
 STATUS_TMP="/dev/shm/hydro_status.json"
 
-python3 - "$STATUS_TMP" "$META" "$ACTIVE" "$ROOT" $VAULTS <<'PYEOF'
+# The page reported the station's own exposure without naming it. It is the
+# figure to compare against what the morning scene called for, so it travels.
+python3 - "$STATUS_TMP" "$META" "$ACTIVE" "$ROOT" "${HYDRO_EXPOSURE_US:-}" \
+         "${HYDRO_GAIN_DB:-}" "${HYDRO_TRIGGER:-}" $VAULTS <<'PYEOF'
 import json, os, re, subprocess, sys, datetime
 
 dst, meta_path, active_path, root = sys.argv[1:5]
-vaults = sys.argv[5:]
+env_exposure, env_gain, env_trigger = sys.argv[5:8]
+vaults = sys.argv[8:]
 
 def run(cmd):
     try:
@@ -166,6 +170,11 @@ status = {
     "health": {"verdict": verdict, "faults": faults, "notes": notes},
     "morning": morning,
     "plan": plan,
+    "settings": {
+        "exposure_us": int(env_exposure) if env_exposure.isdigit() else None,
+        "gain_db": env_gain or None,
+        "trigger": env_trigger or None,
+    },
     "station": station,
     "storage": storage,
     "bursts": bursts,
