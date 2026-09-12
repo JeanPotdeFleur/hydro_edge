@@ -1,0 +1,13 @@
+[Unit]
+Description=GATE A2 stability soak, software leg
+
+[Timer]
+# Minutes 0, 20 and 40 of every hour from 17:00 to 06:50 local. The window
+# closes before 08:00 so the morning capture finds the sensors free.
+OnCalendar=*-*-* 17..23,00..06:00/20 America/Los_Angeles
+Persistent=false
+AccuracySec=1s
+Unit=hydro-a2soak@software.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=GATE A2 stability soak, hardware leg
+
+[Timer]
+# Minutes 10, 30 and 50: interleaved with the software leg, so the two modes
+# alternate every ten minutes and the common drift is shared between them.
+OnCalendar=*-*-* 17..23,00..06:10/20 America/Los_Angeles
+Persistent=false
+AccuracySec=1s
+Unit=hydro-a2soak@line2.service
+
+[Install]
+WantedBy=timers.target

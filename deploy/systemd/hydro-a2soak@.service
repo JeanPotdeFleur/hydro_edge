@@ -1,0 +1,37 @@
+[Unit]
+Description=GATE A2 stability soak, 120 s burst under %i triggering
+Documentation=https://github.com/JeanPotdeFleur/hydro_edge
+
+RequiresMountsFor=/mnt/vault
+Wants=time-sync.target
+After=time-sync.target network-online.target
+
+[Service]
+Type=exec
+User=bakerlab
+Group=bakerlab
+
+EnvironmentFile=/etc/default/hydro-edge
+
+# The instance name is the trigger mode, not the duration: the point of the
+# run is to alternate modes at a fixed duration, which the duration-templated
+# environment file of hydro-burst@.service cannot express.
+ExecStartPre=/bin/mkdir -p /mnt/vault/a2soak
+ExecStart=/home/bakerlab/hydro_edge/build/hydro_edge \
+    --output /mnt/vault/a2soak \
+    --duration 120 \
+    --cam0-serial ${HYDRO_CAM0} \
+    --cam1-serial ${HYDRO_CAM1} \
+    --exposure-us ${HYDRO_EXPOSURE_US} \
+    --gain-db ${HYDRO_GAIN_DB} \
+    --trigger %i \
+    --require-clock-sync
+
+Restart=no
+RuntimeMaxSec=240
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+SyslogIdentifier=hydro-a2soak
+StandardOutput=journal
+StandardError=journal
