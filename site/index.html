@@ -71,6 +71,8 @@
   td:last-child,th:last-child{text-align:right}
   .bad{color:var(--brick)}
   ul.why{margin:.4rem 0 0;padding-left:1.1rem;color:var(--kelp);font-size:.92rem}
+  tr.bnote td{color:var(--kelp);font-size:.88rem;padding-top:0;
+              border-bottom:1px solid var(--line);text-align:left}
   footer{color:var(--kelp);font-size:.85rem;margin-top:2.2rem}
 </style>
 </head>
@@ -95,11 +97,14 @@
   <section class="today">
     <p class="big" id="planline">&mdash;</p>
     <p id="planwhy"></p>
+    <p id="plannote" class="sub" style="margin:.35rem 0 0" hidden></p>
     <button id="edit" type="button">Change today's plan</button>
-    <p class="sub" style="margin:.6rem 0 0">Edits made before 09:45 Pacific take
-    effect today. Set <span class="num">date</span> to today's date,
+    <p class="sub" style="margin:.6rem 0 0">A change applies to the day you
+    commit it. The station reads the plan at 09:50 Pacific, resets the file,
+    and does not look again that day. Set
     <span class="num">bursts</span> between 0 and 3, and
-    <span class="num">exposure_us</span> between 100 and 20000.</p>
+    <span class="num">exposure_us</span> between 100 and 20000 or
+    <span class="num">null</span>.</p>
   </section>
 
   <h2>Metered this morning</h2>
@@ -171,17 +176,8 @@ fetch("status.json" + q).then(r => r.json()).then(s => {
     }
   }
 
-  const p = s.plan || {}, slots = p.slots || [];
-  const hhmm = t => t.slice(0, 2) + ":" + t.slice(2);
-  document.getElementById("planline").textContent =
-    slots.length === 0 ? "No burst today"
-    : `${slots.length} burst${slots.length > 1 ? "s" : ""} \u2014 ` +
-      slots.map(hhmm).join(" and ");
-  document.getElementById("planwhy").textContent =
-    (p.source === "plan" ? "From today's plan" : "Standard schedule")
-    + (p.exposure_us ? `, exposure ${p.exposure_us} \u00b5s`
-                     : ", exposure from the station's own setting")
-    + (p.reason && p.source !== "plan" ? ` (${p.reason})` : "");
+  appliedPlan = s.plan || {};
+  maybeRender();
 
   const m = s.morning || {}, r = m.radiometry || {};
   const dm = document.getElementById("metered");
@@ -209,6 +205,14 @@ fetch("status.json" + q).then(r => r.json()).then(s => {
       `<td class="${ok ? "" : "bad"}">${ok ? "complete"
         : (b.completed ? b.lost + " frames lost" : "incomplete")}</td>`;
     tb.append(tr);
+    if (b.note) {
+      const nr = document.createElement("tr");
+      nr.className = "bnote";
+      const td = document.createElement("td");
+      td.colSpan = 3;
+      td.textContent = "\u201c" + b.note + "\u201d";
+      nr.append(td); tb.append(nr);
+    }
   });
   if (!(s.bursts || []).length) {
     tb.innerHTML = '<tr><td colspan="3">No burst on record yet.</td></tr>';
@@ -226,6 +230,140 @@ fetch("status.json" + q).then(r => r.json()).then(s => {
     "status.json has not been published here. It appears after the first "
     + "morning cycle.";
   document.getElementById("planline").textContent = "Schedule not known yet";
+});
+
+// --------------------------------------------------------------------------
+// The plan as it stands right now, which between an edit and the read at 09:50
+// is not the plan the station last acted on. Function declarations are hoisted,
+// so the status callback above may call maybeRender before this point is
+// reached in source order.
+
+const SLOTS = { 0: [], 1: ["1000"], 2: ["1000", "1700"],
+                3: ["1000", "1300", "1700"] };
+const slotTime = t => t.slice(0, 2) + ":" + t.slice(2);
+const pacific = d => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Los_Angeles", year: "numeric",
+  month: "2-digit", day: "2-digit" }).format(d);
+
+let appliedPlan = null, livePlan = undefined, liveDate = null, liveBy = null;
+
+function slotLine(slots) {
+  if (!slots || slots.length === 0) return "No burst today";
+  return `${slots.length} burst${slots.length > 1 ? "s" : ""} \u2014 `
+       + slots.map(slotTime).join(slots.length > 2 ? ", " : " and ");
+}
+
+const exposurePhrase = e =>
+  e ? `exposure ${e} \u00b5s` : "exposure from the station's own setting";
+
+// The same bounds the station applies, so the page never promises what will be
+// refused, and names the field that is wrong rather than saying something is.
+function checkPlan(raw) {
+  if (raw === null || typeof raw !== "object")
+    return { bad: "it is not valid JSON" };
+  const b = raw.bursts;
+  if (!Number.isInteger(b) || b < 0 || b > 3)
+    return { bad: `bursts is ${JSON.stringify(b)}, and must be 0, 1, 2 or 3` };
+  const e = raw.exposure_us;
+  if (e !== null && e !== undefined
+      && (!Number.isFinite(e) || e < 100 || e > 20000))
+    return { bad: `exposure_us is ${JSON.stringify(e)}, and must be null or `
+                + `between 100 and 20000` };
+  if (raw.date !== null && raw.date !== undefined
+      && !/^\d{4}-\d{2}-\d{2}$/.test(String(raw.date)))
+    return { bad: `date is ${JSON.stringify(raw.date)}, and must be null or `
+                + `YYYY-MM-DD` };
+  return { bursts: b, exposure_us: (e === undefined ? null : e),
+           date: (raw.date === undefined ? null : raw.date),
+           note: String(raw.note || "") };
+}
+
+function maybeRender() {
+  const lineEl = document.getElementById("planline");
+  const whyEl = document.getElementById("planwhy");
+  const noteEl = document.getElementById("plannote");
+  // Cleared on every pass: maybeRender runs once when the status arrives and
+  // again when the plan does, and a note revealed by the first would otherwise
+  // survive a second that has none.
+  noteEl.hidden = true; noteEl.textContent = "";
+  const showNote = t => { if (t) { noteEl.textContent = "\u201c" + t + "\u201d";
+                                   noteEl.hidden = false; } };
+
+  // Nothing published yet, but a plan sits in the repository: worth showing.
+  if (!appliedPlan) {
+    if (livePlan && !livePlan.bad) {
+      lineEl.textContent = slotLine(SLOTS[livePlan.bursts]);
+      whyEl.textContent = exposurePhrase(livePlan.exposure_us)
+        + ". Pending: the station has not reported since this was written.";
+      showNote(livePlan.note);
+    }
+    return;
+  }
+
+  const a = appliedPlan;
+  const appliedWhy = () =>
+    (a.source === "plan" ? "From today's plan, " : "Standard schedule, ")
+    + exposurePhrase(a.exposure_us)
+    + (a.reason && a.source !== "plan" ? ` (${a.reason})` : "");
+
+  // The station resets the file after reading it, so its own commit is the
+  // signal that nothing is waiting. A human commit is an edit not yet read.
+  const stationWrote = liveBy === "hopkins1-pi5";
+
+  if (livePlan === undefined || livePlan === null || stationWrote) {
+    lineEl.textContent = slotLine(a.slots);
+    whyEl.textContent = appliedWhy();
+    showNote(a.note);
+    return;
+  }
+
+  if (livePlan.bad) {
+    lineEl.textContent = slotLine(SLOTS[2]);
+    whyEl.textContent = "The plan in the repository will be refused, because "
+      + livePlan.bad + ". The station will acquire two bursts at 10:00 and "
+      + "17:00.";
+    return;
+  }
+
+  const today = pacific(new Date());
+  const effective = livePlan.date || liveDate;
+
+  if (effective && effective > today) {
+    lineEl.textContent = slotLine(a.slots);
+    whyEl.textContent = appliedWhy()
+      + `. A plan of ${slotLine(SLOTS[livePlan.bursts]).toLowerCase()} is `
+      + `waiting for ${effective}.`;
+  } else if (effective && effective !== today) {
+    lineEl.textContent = slotLine(a.slots);
+    whyEl.textContent = appliedWhy()
+      + `. The plan in the repository is dated ${effective} and does not `
+      + "apply today.";
+  } else {
+    lineEl.textContent = slotLine(SLOTS[livePlan.bursts]);
+    whyEl.textContent = exposurePhrase(livePlan.exposure_us)
+      + ". Pending: the station reads the plan at 09:50 Pacific and has not "
+      + "seen this change yet.";
+  }
+  showNote(livePlan.note || a.note);
+}
+
+Promise.all([
+  fetch("control/plan.json" + q).then(r => r.ok ? r.json() : null)
+    .catch(() => null),
+  // A plan that states no date of its own is dated by its commit, which is the
+  // fact the station reads. The page asks for the same one instead of guessing,
+  // and the committer tells it whether the last write was the station's reset.
+  fetch(`https://api.github.com/repos/${OWNER}/${REPO}`
+        + "/commits?path=control/plan.json&per_page=1")
+    .then(r => r.ok ? r.json() : null)
+    .then(c => (c && c[0]) ? {
+      day: pacific(new Date(c[0].commit.committer.date)),
+      by: c[0].commit.committer.name } : null)
+    .catch(() => null),
+]).then(([raw, commit]) => {
+  livePlan = (raw === null) ? null : checkPlan(raw);
+  if (commit) { liveDate = commit.day; liveBy = commit.by; }
+  maybeRender();
 });
 </script>
 </body>

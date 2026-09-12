@@ -1,0 +1,20 @@
+{
+  "help": [
+    "Change what you need below, then press Commit changes.",
+    "The plan applies to the day you commit it, and only if committed before the station reads it at 09:50 Pacific.",
+    "Once the station has read it, this file is reset to these defaults, so it is blank again the next morning.",
+    "Anything missing or out of range falls back to two bursts at 10:00 and 17:00, with the reason shown on the status page."
+  ],
+
+  "bursts": 2,
+  "_bursts": "0, 1, 2 or 3.  1 = 10:00.  2 = 10:00 and 17:00.  3 = 10:00, 13:00 and 17:00.  Each burst lasts 40 minutes.",
+
+  "exposure_us": null,
+  "_exposure_us": "100 to 20000, or null to keep the station's own value. The morning image on the status page shows what the scene called for.",
+
+  "note": "",
+  "_note": "Free text, why today is being treated this way. It is copied into the archive beside the frames and shown on the status page.",
+
+  "date": null,
+  "_date": "Leave null for today. Set a future date, YYYY-MM-DD Pacific, only to prepare a plan a day or more ahead."
+}

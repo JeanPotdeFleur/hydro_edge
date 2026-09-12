@@ -89,8 +89,14 @@ for v in vaults:
         if not s:
             continue
         c = s.get("counters", {})
+        # run_burst.sh leaves the plan it applied beside the manifest, so the
+        # note travels with the frames it explains rather than being kept
+        # anywhere else. A burst run by hand has no such file.
+        pa = load(os.path.join(d, "plan_applied.json"))
         bursts.append({
             "id": name, "volume": v,
+            "note": str((pa.get("plan") or {}).get("note", ""))[:200],
+            "slot": pa.get("slot"),
             "completed": bool(s.get("completed")),
             "frames": c.get("frames_written"),
             "target": c.get("target_triggers"),

@@ -11,13 +11,20 @@ Group=bakerlab
 EnvironmentFile=/etc/default/hydro-edge
 ExecStart=/home/bakerlab/hydro_edge/scripts/fetch_plan.sh
 
+# Publish again once the plan is resolved. Without this the page shows the plan
+# as it stood at 08:00, before the day's plan had been read at 09:50, so a
+# researcher editing at 09:30 never saw the edit confirmed: the page kept
+# announcing the previous schedule until the next morning. The morning image is
+# unchanged and costs nothing to republish, git storing no new object for an
+# identical file.
+ExecStart=/home/bakerlab/hydro_edge/scripts/push_status.sh
+
 # Publish again once the plan is resolved. Without this the page shows
 # the plan as it stood at 08:00, before the day's plan had been read at
 # 09:50, so a researcher editing at 09:30 never sees the edit confirmed:
 # the page keeps announcing the previous schedule until the next morning.
 # The morning image is unchanged and costs nothing to republish, git
 # storing no new blob for an identical file.
-ExecStart=/home/bakerlab/hydro_edge/scripts/push_status.sh
 
 SyslogIdentifier=hydro-plan
 StandardOutput=journal
