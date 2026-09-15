@@ -12,6 +12,16 @@
 #
 set -o nounset
 
+# The acquisition settings live in the environment file the service units read
+# as an EnvironmentFile. Sourced here as well, so that a run by hand reports
+# and applies exactly what a scheduled run does. Under systemd the variables
+# are already set and this does nothing.
+if [ -z "${HYDRO_EXPOSURE_US:-}" ] && [ -r /etc/default/hydro-edge ]; then
+    set -a
+    . /etc/default/hydro-edge
+    set +a
+fi
+
 ROOT="${HYDRO_ROOT:-/home/bakerlab/hydro_edge}"
 SITE="${HYDRO_SITE:-/home/bakerlab/hopkins-station}"
 IMG="${HYDRO_MORNING_IMG:-/dev/shm/hydro_morning.jpg}"
