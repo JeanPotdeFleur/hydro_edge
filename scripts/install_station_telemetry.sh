@@ -439,7 +439,14 @@ bursts.sort(key=lambda b: b.get("ended_utc") or "", reverse=True)
 bursts = bursts[:6]
 
 # ---- acceptance and journal ---------------------------------------------
-verify_raw = run(f"{root}/scripts/verify_burst.py --quiet {vaults[0]} 2>&1 | tail -8")
+# Both volumes, not the first alone. run_burst.sh writes each burst to whichever
+# volume is the emptier, so the two alternate and half the archive sits on the
+# second one; checking vaults[0] only would leave that half unverified until the
+# drives are retrieved, up to six weeks later. verify_burst.py takes several
+# roots, and an unmounted volume is dropped rather than passed as a bad path.
+verify_roots = " ".join(v for v in vaults if os.path.isdir(v))
+verify_raw = run(f"{root}/scripts/verify_burst.py --quiet {verify_roots} "
+                 f"2>&1 | tail -12") if verify_roots else "no archive volume mounted"
 anomalies = run("journalctl --since '24 hours ago' --no-pager "
                 "| grep -cE 'CRITICAL|FATAL|WARNING' || true")
 timers = []
