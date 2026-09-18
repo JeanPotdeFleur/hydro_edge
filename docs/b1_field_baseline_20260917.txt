@@ -1,0 +1,19 @@
+Thu Sep 17 21:32:46 UTC 2026
+--- baseline
+/dev/mapper/vault_vg-vault_lv  7.3T  332G  6.9T   5% /mnt/vault
+/dev/sdb                       7.3T  113G  7.2T   2% /mnt/vault2
+42450
+throttled=0x0
+190 Airflow_Temperature_Cel 0x0032   072   060   000    Old_age   Always       -       28
+190 Airflow_Temperature_Cel 0x0032   072   054   000    Old_age   Always       -       28
+HYDRO_OUTPUT=/mnt/vault
+HYDRO_EXPOSURE_US=6000
+HYDRO_TRIGGER=line2
+HYDRO_OUTPUT_ALT=/mnt/vault2
+
+--- end of run, Fri Sep 18 00:24:58 UTC 2026
+IR gun: not taken, door not opened at burst end
+190 Airflow_Temperature_Cel 0x0032   076   060   000    Old_age   Always       -       24
+190 Airflow_Temperature_Cel 0x0032   067   054   000    Old_age   Always       -       33
+36400
+throttled=0x0

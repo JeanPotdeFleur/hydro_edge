@@ -287,13 +287,26 @@ if mountpoint -q "$alt"; then
 fi
 
 # ---- acquire ---------------------------------------------------------------
+# The clock guard is conditional because the station may have to run with no
+# network, hence with no disciplined clock. Refusing every burst would then be
+# worse than naming a directory from a clock set by hand: free-running, that
+# clock drifts at 1.67 ppm, some six seconds over six weeks, while the cadence
+# inside a burst is anchored on the PPS edge and is unaffected. The manifest
+# records clock_synchronized either way, so the provenance stays honest. The
+# default remains to require synchronisation.
+clock_flag="--require-clock-sync"
+if [ "${HYDRO_REQUIRE_CLOCK_SYNC:-1}" = "0" ]; then
+    clock_flag=""
+    log "clock sync requirement waived; timestamps come from a free-running clock."
+fi
+
 log "${source_name} schedule, ${DURATION} s, exposure ${exposure} us, output ${output}."
 started="$(date +%s)"
 
 "$BIN" --output "$output" --duration "$DURATION" \
     --cam0-serial "${HYDRO_CAM0}" --cam1-serial "${HYDRO_CAM1}" \
     --exposure-us "$exposure" --gain-db "${HYDRO_GAIN_DB}" \
-    --trigger "${HYDRO_TRIGGER}" --require-clock-sync &
+    --trigger "${HYDRO_TRIGGER}" ${clock_flag} &
 child=$!
 
 # systemd kills the whole control group, so the binary receives SIGTERM
